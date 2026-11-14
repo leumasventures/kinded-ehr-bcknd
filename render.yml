@@ -1,0 +1,27 @@
+# Optional: lets Render create the service from this file (New > Blueprint). You can also set it up by hand in the dashboard.
+services:
+  - type: web
+    name: hospital-ms-server
+    runtime: node
+    buildCommand: npm ci
+    startCommand: npm run migrate && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: "3306"
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_SSL
+        value: "true"
+      - key: CORS_ORIGINS
+        sync: false

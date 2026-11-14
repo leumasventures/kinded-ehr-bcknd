@@ -1,0 +1,73 @@
+kinded-care-ehr-bckend/
+│
+├── sql/                              replaces prisma/
+│   ├── schema.sql                    (exists)
+│   └── migrations/                   numbered .sql files from now on
+│
+├── src/
+│   ├── config/
+│   │   ├── database.js               (exists as db.js) pool, query, tx
+│   │   ├── environment.js            (exists as config.js) env + rate limits
+│   │   └── permissions.js            (exists as permissions.js) modules, actions
+│   │
+│   ├── controllers/                  request in, response out
+│   │   ├── auth.controller.js        login, refresh, logout, change password
+│   │   ├── staff.controller.js       users: create, edit, deactivate, temp password
+│   │   ├── role.controller.js
+│   │   ├── patient.controller.js     register, search, duplicates
+│   │   ├── emergency.controller.js   break-glass grants
+│   │   ├── audit.controller.js       list, verify chain
+│   │   ├── appointment.controller.js (later)
+│   │   ├── clinical.controller.js    notes, triage, orders (later)
+│   │   └── billing.controller.js     invoices, claims, charges (later)
+│   │
+│   ├── middleware/
+│   │   ├── auth.middleware.js        authenticate (JWT, active user)
+│   │   ├── permission.middleware.js  requirePerm(module, action), requireAdmin
+│   │   ├── rateLimit.middleware.js   login and refresh limiters
+│   │   ├── validate.middleware.js    runs a zod schema
+│   │   └── error.middleware.js
+│   │
+│   ├── routes/
+│   │   ├── index.js                  mounts everything under /api
+│   │   ├── auth.routes.js
+│   │   ├── staff.routes.js
+│   │   ├── role.routes.js
+│   │   ├── patient.routes.js
+│   │   ├── emergency.routes.js
+│   │   ├── audit.routes.js
+│   │   └── appointment.routes.js     (later)
+│   │
+│   ├── services/                     business rules and SQL
+│   │   ├── token.service.js          access and rotating refresh tokens
+│   │   ├── password.service.js       bcrypt, policy, temp passwords
+│   │   ├── audit.service.js          append-only hash chain
+│   │   ├── patient.service.js        ID counter, duplicate detection
+│   │   ├── emergency.service.js
+│   │   ├── billing.service.js        transactions: charges, claims (later)
+│   │   └── merge.service.js          patient merge (later)
+│   │
+│   ├── validators/                   zod schemas, one file per module
+│   │   ├── auth.validator.js
+│   │   ├── staff.validator.js
+│   │   └── patient.validator.js
+│   │
+│   ├── utils/
+│   │   └── errors.js                 (exists) HttpError helpers
+│   │
+│   ├── app.js
+│   └── server.js
+│
+├── scripts/
+│   ├── migrate.js                    (exists)
+│   └── seed.js                       (exists)
+│
+├── tests/
+│   └── api.test.js                   (exists, 14 tests)
+│
+├── .env
+├── .env.example
+├── .gitignore
+├── render.yaml
+├── README.md
+└── package.json
