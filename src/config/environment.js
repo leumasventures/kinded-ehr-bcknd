@@ -46,5 +46,5 @@ export function assertConfig() {
   if (config.jwtSecret.length < 32) {
     throw new Error("JWT_SECRET must be set to a random string of at least 32 characters.");
   }
-  if (config.corsOrigins.length === 0) throw new Error("CORS_ORIGINS must list the address of your website, for example https://kindedcarehospital.com.");
+  if (config.corsOrigins.length === 0) throw new Error("https://kindedcarehospital.com.");
 }
