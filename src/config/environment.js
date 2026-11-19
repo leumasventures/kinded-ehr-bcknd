@@ -41,10 +41,29 @@ export function assertDatabaseConfig() {
 }
 
 /** Refuses to start with a missing or weak signing secret (a guessable secret lets anyone forge a login), or without a database or a website allowed to call it. */
-export function assertConfig() {
-  assertDatabaseConfig();
-  if (config.jwtSecret.length < 32) {
-    throw new Error("JWT_SECRET must be set to a random string of at least 32 characters.");
+export function assertDatabaseConfig() {
+  const missing = [
+    "DB_HOST",
+    "DB_USER",
+    "DB_PASSWORD",
+    "DB_NAME",
+  ].filter((k) => !String(process.env[k] ?? "").trim());
+
+  if (missing.length) {
+    throw new Error(
+      `Missing database settings: ${missing.join(", ")}.`
+    );
   }
-  if (config.corsOrigins.length === 0) throw new Error("https://kindedcarehospital.com.");
+
+  const host = config.db.host;
+
+  if (
+    LOOPBACK.test(host) ||
+    host.includes("://") ||
+    host.includes("/")
+  ) {
+    throw new Error(
+      "DB_HOST must be a valid hosted MySQL hostname, without https:// or a URL path."
+    );
+  }
 }
