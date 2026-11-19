@@ -1,7 +1,7 @@
 # Optional: lets Render create the service from this file (New > Blueprint). You can also set it up by hand in the dashboard.
 services:
   - type: web
-    name: hospital-ms-server
+    name: kinded-care-ehr-backend
     runtime: node
     buildCommand: npm ci
     startCommand: npm run migrate && npm start
@@ -22,6 +22,6 @@ services:
       - key: DB_NAME
         sync: false
       - key: DB_SSL
-        value: "true"
+        value: "false"
       - key: CORS_ORIGINS
         sync: false

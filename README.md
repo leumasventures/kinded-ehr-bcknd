@@ -13,7 +13,7 @@ src/
   validators/   zod schemas for request bodies
   middleware/   authenticate, requirePerm/requireAdmin, rate limits, validate, errors
   utils/        errors.js
-tests/          api.test.js (14 tests, need a database whose name contains "test")
+tests/          api.test.js, billing-merge.test.js (need a scratch database whose name contains "test")
 ```
 
 
@@ -29,21 +29,29 @@ Node + Express + MySQL API for the hospital web app. This milestone covers the p
 | Patients | Register, search, update, delete (refused when clinical notes exist), duplicate detection, IDs issued in order by the server |
 | Users and roles | Administrator-only management. The last administrator can't be removed, demoted or deactivated |
 
-Not done yet (next milestones): appointments, admissions, lab, pharmacy, billing and claims, accounts, roster, clinical notes endpoints, patient merge, and switching the web app over to this API. **The web app still uses its browser-only demo data until then.**
+Services written and tested, with no HTTP endpoints yet: `billing.service.js` (invoices, automatic charges, payments, insurance claims) and `merge.service.js` (patient merge). Not done yet: admissions, lab, pharmacy, billing and claims, accounts, roster and clinical notes endpoints.
 
-## Run it on your computer
+## Everything goes to the hosted database
 
-You need Node 20 or newer and a MySQL 8 (or MariaDB 10.6+) database.
+There is no local database and no localhost anywhere. The server will not start, migrate or seed unless `DB_HOST`, `DB_USER`, `DB_PASSWORD` and `DB_NAME` are set, and it refuses a `DB_HOST` that is localhost or 127.0.0.1. `CORS_ORIGINS` (the website allowed to call the API, `https://kindedcarehospital.com`) and `JWT_SECRET` are required too.
+
+### One-time setup on Hostinger
+
+1. hPanel > Databases > Management: note the database name and user (`u986504880_kindedEHR_db`).
+2. hPanel > Databases > **Remote MySQL**: allow the address of the machine that will connect (your own computer's public IP for running `migrate`, and Render's outbound IPs, shown in the Render service's **Connect > Outbound** tab). The **hostname** shown on that page is your `DB_HOST`.
+3. Keep the password only in Render's Environment tab (or your own `.env`, which is git-ignored). Never paste it in chat or commit it.
+
+### Create the tables and the first administrator
+
+Run these from any machine whose address you allowed in step 2, with the variables from `.env.example` set in `.env`:
 
 ```bash
 npm install
-cp .env.example .env        # then edit .env: database details and JWT_SECRET
-npm run migrate             # creates the tables (safe to run again)
+npm run migrate        # creates the tables in the hosted database (safe to run again)
 ADMIN_EMAIL=you@example.com ADMIN_NAME="Your Name" npm run seed
-npm run dev                 # http://localhost:4000/health
 ```
 
-`npm run seed` prints a one-time password for the first administrator. It is shown once and not stored. Sign in, and you will be asked to choose your own.
+`npm run seed` prints a one-time password for the first administrator. It is shown once and not stored. Sign in at the website, and you will be asked to choose your own.
 
 Make the secret with:
 
@@ -53,21 +61,20 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 
 ## Deploy on Render
 
-1. Create a MySQL database with a hosting provider (Render does not offer MySQL itself). Note its host, port, user, password and database name.
-2. Push this project to GitHub. In Render choose **New > Web Service** (or **New > Blueprint** to use `render.yaml`), point it at the repository and leave the root directory empty (the backend sits at the top of the repository).
-3. Build command `npm ci`, start command `npm run migrate && npm start`.
-4. Set the environment variables from `.env.example`. `CORS_ORIGINS` must be your GitHub Pages address, for example `https://your-user.github.io`.
-5. Open the service's **Shell** and run `ADMIN_EMAIL=you@example.com ADMIN_NAME="Your Name" npm run seed` once.
+1. Push this project to GitHub. In Render choose **New > Web Service** (or **New > Blueprint** to use `render.yaml`), point it at the repository and leave the root directory empty.
+2. Build command `npm ci`, start command `npm run migrate && npm start`.
+3. Environment tab: `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `JWT_SECRET`, `CORS_ORIGINS=https://kindedcarehospital.com`.
+4. Check `https://YOUR-SERVICE.onrender.com/health`.
+5. Frontend: build it with `VITE_API_URL=https://YOUR-SERVICE.onrender.com/api` (a GitHub Actions variable or a `.env.production` file). The site shows a "not connected" screen if this is missing.
 
-**Database account:** create a separate MySQL user for the app and, if your provider allows it, do not grant it `UPDATE` or `DELETE` on `audit_log`. The triggers already refuse them, and this closes the gap if someone drops a trigger.
+**Database account:** if Hostinger lets you, do not grant the app's user `UPDATE` or `DELETE` on `audit_log`. The triggers already refuse them, and this closes the gap if someone drops a trigger.
 
 ## Tests
 
-The tests run against a real database and **wipe it first**. The database name must contain "test".
+The tests wipe the database they connect to and refuse any database whose name does not contain "test". Use a separate scratch database on your hosted server, never the real one:
 
 ```bash
-mysql -e "CREATE DATABASE hms_test"
-TEST_DB_USER=root TEST_DB_PASSWORD=yourpassword npm test
+TEST_DB_HOST=... TEST_DB_PORT=3306 TEST_DB_USER=... TEST_DB_PASSWORD=... TEST_DB_NAME=yourprefix_test npm test
 ```
 
 ## API
@@ -87,6 +94,11 @@ All paths start with `/api`. Send `Authorization: Bearer <accessToken>`. Errors 
 | `GET /patients?search=&limit=&offset=`, `GET /patients/:id` | Patients: view (or emergency access) | opening a record is logged |
 | `POST /patients` | Patients: create | `409 possible_duplicate` unless `allowDuplicate: true` |
 | `PUT /patients/:id`, `DELETE /patients/:id` | Patients: edit, delete | |
+| `GET /appointments?date=&from=&to=&doctor=&patientId=&status=`, `GET /appointments/:id` | Appointments: view | the patient's name and phone come from the register |
+| `POST /appointments` | Appointments: create | `{ patientId, doctor, date, time, type, reason? }`; `409 slot_taken` if the doctor is already booked then (the database enforces it) |
+| `PUT /appointments/:id` | Appointments: edit | reschedule or change doctor, type, reason; only while Scheduled or Checked in |
+| `POST /appointments/:id/status` | Appointments: edit | `{ status }`; allowed moves are Scheduled, Checked in, In Progress, Completed, with Cancelled and No-show able to be rebooked |
+| `DELETE /appointments/:id` | Appointments: delete | only Scheduled, Cancelled or No-show, and not once clinical notes are linked |
 | `GET/POST/DELETE /emergency-access` | signed in | POST `{ reason }` (15+ characters) |
 | `GET /audit`, `GET /audit/verify` | administrators | filters: `from`, `to`, `user`, `action`, `module`, `outcome`, `q`, `before`, `limit` |
 

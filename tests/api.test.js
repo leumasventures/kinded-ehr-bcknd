@@ -1,10 +1,11 @@
 // Runs against a real MySQL/MariaDB database that it wipes first. Never point it at real data.
-//   TEST_DB_HOST=127.0.0.1 TEST_DB_PORT=3306 TEST_DB_USER=root TEST_DB_PASSWORD= TEST_DB_NAME=hms_test npm test
+// Needs a SEPARATE scratch database (its name must contain "test"). Never point it at the hosted production database.
+//   TEST_DB_HOST=... TEST_DB_PORT=3306 TEST_DB_USER=... TEST_DB_PASSWORD=... TEST_DB_NAME=..._test npm test
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 
-process.env.DB_HOST = process.env.TEST_DB_HOST ?? "127.0.0.1";
+if (!process.env.TEST_DB_HOST) throw new Error("Set TEST_DB_HOST (and the other TEST_DB_* settings) to a scratch test database.");
+process.env.DB_HOST = process.env.TEST_DB_HOST;
 process.env.DB_PORT = process.env.TEST_DB_PORT ?? "3306";
 process.env.DB_USER = process.env.TEST_DB_USER ?? "root";
 process.env.DB_PASSWORD = process.env.TEST_DB_PASSWORD ?? "";
@@ -21,6 +22,7 @@ const { pool, query } = await import("../src/config/database.js");
 const { hashPassword } = await import("../src/services/password.service.js");
 const { seedRoles } = await import("../src/config/permissions.js");
 const { verifyChain } = await import("../src/services/audit.service.js");
+const { applySchema } = await import("../scripts/applySchema.js");
 
 let server;
 let base;
@@ -61,8 +63,7 @@ before(async () => {
   await db.query("SET FOREIGN_KEY_CHECKS = 0");
   for (const { t } of tables) await db.query(`DROP TABLE IF EXISTS \`${t}\``);
   await db.query("SET FOREIGN_KEY_CHECKS = 1");
-  await db.query(readFileSync(new URL("../sql/schema.sql", import.meta.url), "utf8"));
-  await db.query("INSERT INTO counters (name, value) VALUES ('patient', 1000)");
+  await applySchema(db);
   for (const r of seedRoles) await db.query("INSERT INTO roles (id, name, description, permissions, is_system) VALUES (?,?,?,?,1)", [r.id, r.name, r.description, JSON.stringify(r.permissions)]);
   await db.query("INSERT INTO users (id, name, email, role_id, active, must_change_password, password_hash) VALUES ('u-admin','Test Admin',?,'r-admin',1,0,?)", [ADMIN.email, await hashPassword(ADMIN.password)]);
   await db.end();
@@ -197,6 +198,7 @@ test("patients: register, validate, find duplicates, search, update", async () =
 
   assert.equal((await api("POST", "/patients", { token: t, body: { ...p, dob: "2999-01-01" } })).status, 400);
   assert.equal((await api("POST", "/patients", { token: t, body: { ...p, gender: "Other" } })).status, 400);
+  assert.equal((await api("POST", "/patients", { token: t, body: { ...p, dob: "1990-02-31" } })).status, 400, "a day that doesn't exist");
 
   const dup = await api("POST", "/patients", { token: t, body: { ...p, name: "N. Okafor", dob: "1991-01-01", phone: "+234 803 555 0101" } });
   assert.equal(dup.status, 409, "same phone number");
@@ -292,4 +294,111 @@ test("audit log: written by the server, filterable, admin-only, tamper-evident a
   assert.equal(bad.ok, false);
   assert.equal(bad.seq, 3);
   await db.end();
+});
+
+test("appointments: registered patients only, no double booking, status rules, permissions, nothing clinical in the log", async () => {
+  const admin = (await login(ADMIN.email, ADMIN.password)).accessToken;
+  const doctor = (await newStaff(admin, "Dr Appt Tester", "appt.doctor@test.local", "r-doctor")).accessToken;
+  const nurse = (await newStaff(admin, "Nurse Appt Tester", "appt.nurse@test.local", "r-nurse")).accessToken;
+  const pat = await api("POST", "/patients", { token: admin, body: { name: "Appt Patient", dob: "1985-02-02", gender: "Male", phone: "0901 555 0001" } });
+  assert.equal(pat.status, 201);
+  const pid = pat.body.patient.id;
+  const day = "2030-03-04";
+  const book = (body, token = admin) => api("POST", "/appointments", { token, body: { patientId: pid, doctor: "Dr. Eze", date: day, time: "09:00", type: "General consultation", ...body } });
+
+  const a = await book({ reason: "secret-clinical-reason" });
+  assert.equal(a.status, 201, JSON.stringify(a.body));
+  assert.equal(a.body.appointment.id, "A-201");
+  assert.equal(a.body.appointment.patient, "Appt Patient", "the name comes from the register");
+  assert.equal(a.body.appointment.status, "Scheduled");
+  assert.equal(a.body.appointment.phone, "0901 555 0001");
+  assert.equal((await book({ time: "09:30", status: "Completed" })).body.appointment.status, "Scheduled", "a client can't choose the status when booking");
+
+  assert.equal((await book({ patientId: "P-9999", time: "10:00" })).status, 400, "unregistered patient");
+  assert.equal((await book({ time: "08:15" })).status, 400, "not a real slot");
+  assert.equal((await book({ type: "Haircut", time: "10:00" })).status, 400);
+  assert.equal((await book({ date: "2030-02-31", time: "10:00" })).status, 400);
+
+  const clash = await book({});
+  assert.equal(clash.status, 409);
+  assert.equal(clash.body.code, "slot_taken");
+  const other = await book({ doctor: "Dr. Obi" });
+  assert.equal(other.status, 201, "a different doctor can have the same time");
+
+  // Five clerks book the same free slot at the same instant: exactly one wins.
+  const race = await Promise.all([1, 2, 3, 4, 5].map(() => book({ date: "2030-03-05", time: "11:00" })));
+  assert.equal(race.filter((r) => r.status === 201).length, 1);
+  assert.equal(race.filter((r) => r.status === 409).length, 4);
+
+  assert.equal((await api("GET", `/appointments?date=${day}`, { token: admin })).body.appointments.length, 3);
+  assert.equal((await api("GET", `/appointments?date=${day}&doctor=Dr.%20Obi`, { token: admin })).body.appointments.length, 1);
+  assert.equal((await api("GET", `/appointments?patientId=${pid}&status=Scheduled`, { token: admin })).body.appointments.length, 4);
+
+  // Rescheduling
+  const id = a.body.appointment.id;
+  assert.equal((await api("PUT", `/appointments/${id}`, { token: admin, body: { time: "14:00" } })).body.appointment.time, "14:00");
+  assert.equal((await api("PUT", `/appointments/${id}`, { token: admin, body: { doctor: "Dr. Obi", time: "09:00" } })).status, 409, "moving onto someone else's slot");
+
+  // Status rules
+  assert.equal((await api("POST", `/appointments/${id}/status`, { token: admin, body: { status: "Completed" } })).status, 409, "can't complete what hasn't started");
+  assert.equal((await api("POST", `/appointments/${id}/status`, { token: admin, body: { status: "Done" } })).status, 400);
+  for (const s of ["Checked in", "In Progress", "Completed"]) assert.equal((await api("POST", `/appointments/${id}/status`, { token: admin, body: { status: s } })).status, 200, s);
+  assert.equal((await api("PUT", `/appointments/${id}`, { token: admin, body: { time: "15:00" } })).status, 409, "a completed appointment is not editable");
+  assert.equal((await api("POST", `/appointments/${id}/status`, { token: admin, body: { status: "Scheduled" } })).status, 409);
+  assert.equal((await api("DELETE", `/appointments/${id}`, { token: admin })).status, 409, "a completed appointment is part of the record");
+
+  // Cancelling frees the slot; bringing it back fails if someone took the slot meanwhile.
+  const obi = other.body.appointment.id;
+  assert.equal((await api("POST", `/appointments/${obi}/status`, { token: admin, body: { status: "Cancelled" } })).status, 200);
+  assert.equal((await book({ doctor: "Dr. Obi" })).status, 201);
+  const back = await api("POST", `/appointments/${obi}/status`, { token: admin, body: { status: "Scheduled" } });
+  assert.equal(back.status, 409);
+  assert.equal(back.body.code, "slot_taken");
+
+  // Permissions: the doctor role can book but not delete; a nurse has no appointment access at all.
+  assert.equal((await api("GET", "/appointments", { token: doctor })).status, 200);
+  assert.equal((await book({ time: "12:00" }, doctor)).status, 201);
+  assert.equal((await api("DELETE", `/appointments/${obi}`, { token: doctor })).status, 403);
+  assert.equal((await api("GET", "/appointments", { token: nurse })).status, 403);
+  assert.equal((await book({ time: "12:30" }, nurse)).status, 403);
+  assert.equal((await api("GET", "/appointments")).status, 401);
+
+  // Deleting: allowed while it is only a booking; the patient can't be deleted while appointments exist.
+  assert.equal((await api("DELETE", `/appointments/${obi}`, { token: admin })).status, 200);
+  assert.equal((await api("GET", `/appointments/${obi}`, { token: admin })).status, 404);
+  assert.equal((await api("DELETE", `/patients/${pid}`, { token: admin })).status, 409);
+
+  // The reason for the visit is clinical and must never reach the audit log.
+  const leaked = await query("SELECT COUNT(*) AS n FROM audit_log WHERE summary LIKE '%secret-clinical-reason%' OR detail LIKE '%secret-clinical-reason%'");
+  assert.equal(Number(leaked[0].n), 0);
+  const logged = await query("SELECT COUNT(*) AS n FROM audit_log WHERE module = 'Appointments'");
+  assert.ok(Number(logged[0].n) >= 8);
+});
+
+test("the web app can report page views and actions, but never sign-ins or security events, and anonymous callers are refused", async () => {
+  const admin = (await login(ADMIN.email, ADMIN.password)).accessToken;
+  const doctor = (await newStaff(admin, "Dr Reporter", "reporter@test.local", "r-doctor")).accessToken;
+  const ok = await api("POST", "/audit/client", { token: doctor, body: { action: "View", module: "Laboratory", summary: "Opened Laboratory" } });
+  assert.equal(ok.status, 201, JSON.stringify(ok.body));
+  for (const action of ["Sign in", "Failed sign-in", "Sign out", "Security", "Nonsense"]) {
+    assert.equal((await api("POST", "/audit/client", { token: doctor, body: { action, module: "x", summary: "y" } })).status, 400, action);
+  }
+  assert.equal((await api("POST", "/audit/client", { body: { action: "View", module: "x", summary: "y" } })).status, 401);
+  assert.equal((await api("POST", "/audit/client", { token: doctor, body: { action: "View", module: "x", summary: "z".repeat(301) } })).status, 400);
+  const log = await api("GET", "/audit?module=Laboratory&q=Opened", { token: admin });
+  const mine = log.body.entries.find((e) => e.summary === "Opened Laboratory");
+  assert.equal(mine.userName, "Dr Reporter", "the server records who, not the browser");
+  assert.match(mine.detail, /Reported by the app/);
+  assert.equal((await api("GET", "/audit", { token: doctor })).status, 403, "still administrators only to read");
+});
+
+test("staff directory is readable by any signed-in user and exposes names only", async () => {
+  const admin = await login(ADMIN.email, ADMIN.password);
+  assert.equal((await api("GET", "/users/directory")).status, 401);
+  const doctor = (await newStaff(admin.accessToken, "Dr Directory", "directory@test.local", "r-doctor")).accessToken;
+  const r = await api("GET", "/users/directory", { token: doctor });
+  assert.equal(r.status, 200);
+  assert.ok(r.body.staff.length >= 2);
+  for (const p of r.body.staff) assert.deepEqual(Object.keys(p).sort(), ["id", "name", "roleId"]);
+  assert.equal((await api("GET", "/users", { token: doctor })).status, 403, "the full list stays administrators only");
 });

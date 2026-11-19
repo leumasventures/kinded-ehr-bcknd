@@ -1,0 +1,37 @@
+import { readFileSync } from "node:fs";
+
+const read = (name) => readFileSync(new URL(`../sql/${name}`, import.meta.url), "utf8");
+
+// MySQL error numbers that mean "this database user is not allowed to create triggers".
+const TRIGGER_DENIED = new Set([1419, 1227, 1142, 1044]);
+
+/**
+ * Creates or upgrades every table and applies the append-only triggers. Safe to run again.
+ * `conn` must be a mysql2 promise connection opened with multipleStatements: true.
+ * Returns { version, warnings } so the caller can tell the person anything that needs their attention.
+ */
+export async function applySchema(conn) {
+  const warnings = [];
+  const [[{ version }]] = await conn.query("SELECT VERSION() AS version");
+  const mariadb = /mariadb/i.test(version);
+  const major = parseInt(version, 10);
+  if (!mariadb && major < 8) warnings.push(`This is MySQL ${version}. Patient search needs MySQL 8 or newer (or MariaDB 10.2+). Ask your host to upgrade the database.`);
+
+  await conn.query(read("schema.sql"));
+  await conn.query("INSERT IGNORE INTO counters (name, value) VALUES ('patient', 1000), ('appointment', 200), ('invoice', 1000), ('claim', 1000)");
+
+  const statements = read("triggers.sql")
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("--"))
+    .join("\n")
+    .split(/;\s*\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  try {
+    for (const sql of statements) await conn.query(sql);
+  } catch (e) {
+    if (!TRIGGER_DENIED.has(e.errno)) throw e;
+    warnings.push("The database refused to create triggers, so the audit log is not locked against edits at database level. It is still hash-chained and 'verify' will catch any change. Ask your host to allow triggers for this user.");
+  }
+  return { version, warnings };
+}

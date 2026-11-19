@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { today } from "../services/patient.service.js";
+import { isoDate } from "./common.validator.js";
 
 const BLOOD = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-", "Unknown"];
 const GENO = ["AA", "AS", "SS", "AC", "SC", "Unknown"];
 const PAYERS = ["Self-pay", "NHIA / NHIS", "HMO", "Corporate"];
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use the format YYYY-MM-DD").refine((s) => !Number.isNaN(Date.parse(`${s}T00:00:00Z`)), "That date doesn't exist");
 
 export const patientBody = z.object({
   name: z.string().trim().min(2, "Enter the patient's full name").max(160),

@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { assertDatabaseConfig } from "../src/config/environment.js";
 import { query, pool } from "../src/config/database.js";
 import { hashPassword, temporaryPassword } from "../src/services/password.service.js";
 import { seedRoles } from "../src/config/permissions.js";
+
+assertDatabaseConfig();
 
 // Creates the standard roles, and the first administrator if nobody exists yet.
 //   ADMIN_EMAIL=you@example.com ADMIN_NAME="Your Name" npm run seed

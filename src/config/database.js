@@ -4,7 +4,7 @@ import { config } from "./environment.js";
 // Dates come back as plain strings ("2026-11-10", "2026-11-10 14:03:22.123") and are stored in UTC,
 // so nothing is shifted by the server's or the database's time zone.
 export const pool = mysql.createPool({
-  host: config.db.host,
+  host: config.db.host || "database-not-configured.invalid", // .invalid can never resolve, so a missing setting can't fall back to localhost
   port: config.db.port,
   user: config.db.user,
   password: config.db.password,

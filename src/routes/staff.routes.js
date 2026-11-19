@@ -6,7 +6,12 @@ import { validate } from "../middleware/validate.middleware.js";
 import { createStaffBody, updateStaffBody } from "../validators/staff.validator.js";
 
 const router = Router();
-router.use(authenticate(), requireAdmin);
+router.use(authenticate());
+
+// Names only, for pickers (duty roster, assignments). Everyone signed in may read it; the full list below is administrators only.
+router.get("/directory", c.directory);
+
+router.use(requireAdmin);
 
 router.get("/", c.list);
 router.post("/", validate(createStaffBody, "Check the user's details."), c.create);

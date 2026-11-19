@@ -31,3 +31,10 @@ export const verify = wrap(async (req, res) => {
   await audit(req, { action: "Security", module: "Audit log", summary: `${req.user.name} checked the audit log: ${result.message}`, outcome: result.ok ? "success" : "failure" });
   res.json(result);
 });
+
+/** The web app reporting an action in a part of the system that is not on the server yet. The server adds who, when and from where. */
+export const clientEntry = wrap(async (req, res) => {
+  const { action, module, summary, detail, outcome } = req.body;
+  await audit(req, { action, module, summary, detail: `Reported by the app.${detail ? ` ${detail}` : ""}`, outcome });
+  res.status(201).json({ ok: true });
+});

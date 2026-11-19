@@ -1,5 +1,7 @@
 import { conflict, notFound, wrap } from "../utils/errors.js";
 import { audit } from "../services/audit.service.js";
+import { countForPatient } from "../services/appointment.service.js";
+import { countInvoicesFor } from "../services/billing.service.js";
 import { countNotes, createPatient, deletePatientRow, findDuplicates, getPatientRow, patientOut, searchPatients, updatePatient } from "../services/patient.service.js";
 
 export const list = wrap(async (req, res) => {
@@ -49,6 +51,8 @@ export const remove = wrap(async (req, res) => {
   const row = await getPatientRow(req.params.id);
   if (!row) throw notFound("Patient not found.");
   if ((await countNotes(row.id)) > 0) throw conflict("This patient has clinical notes on file. Clinical records are kept, so the patient can't be deleted.");
+  if ((await countForPatient(row.id)) > 0) throw conflict("This patient has appointments on file, so the patient can't be deleted.");
+  if ((await countInvoicesFor(row.id)) > 0) throw conflict("This patient has invoices on file, so the patient can't be deleted.");
   await deletePatientRow(row.id);
   await audit(req, { action: "Delete", module: "Patients", summary: `Deleted patient ${row.name} (${row.id})` });
   res.json({ ok: true });

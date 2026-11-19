@@ -95,6 +95,101 @@ CREATE TABLE IF NOT EXISTS appointments (
   CONSTRAINT fk_appointments_patient FOREIGN KEY (patient_id) REFERENCES patients(id)
 ) ENGINE=InnoDB;
 
+-- Billing. Money is DECIMAL(12,2). Invoice number and id are the same thing (INV-1001), issued by the server.
+CREATE TABLE IF NOT EXISTS invoices (
+  id          VARCHAR(20)   NOT NULL PRIMARY KEY,
+  patient_id  VARCHAR(20)   NOT NULL,
+  inv_date    DATE          NOT NULL,
+  due_date    DATE          NOT NULL,
+  discount    DECIMAL(12,2) NOT NULL DEFAULT 0,
+  vat_rate    DECIMAL(5,2)  NOT NULL DEFAULT 0,
+  notes       VARCHAR(500)  NULL,
+  created_by  VARCHAR(40)   NULL,
+  created_at  DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  KEY idx_invoices_patient (patient_id, inv_date),
+  CONSTRAINT fk_invoices_patient FOREIGN KEY (patient_id) REFERENCES patients(id)
+) ENGINE=InnoDB;
+
+-- `source` names the event that caused an automatic charge (appt:A-201, lab:L-501). The UNIQUE key means the same
+-- event can never charge the same item twice for a patient. Manual lines have no source, and NULLs never clash.
+CREATE TABLE IF NOT EXISTS invoice_items (
+  id          BIGINT        NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  invoice_id  VARCHAR(20)   NOT NULL,
+  patient_id  VARCHAR(20)   NOT NULL,
+  description VARCHAR(255)  NOT NULL,
+  qty         DECIMAL(10,2) NOT NULL,
+  unit_price  DECIMAL(12,2) NOT NULL,
+  source      VARCHAR(80)   NULL,
+  UNIQUE KEY uq_item_source (patient_id, source, description),
+  KEY idx_items_invoice (invoice_id),
+  CONSTRAINT fk_items_invoice FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS payments (
+  id          BIGINT        NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  invoice_id  VARCHAR(20)   NOT NULL,
+  pay_date    DATE          NOT NULL,
+  amount      DECIMAL(12,2) NOT NULL,
+  method      ENUM('Cash','Bank Transfer','POS','Cheque','HMO / Insurance') NOT NULL,
+  reference   VARCHAR(80)   NULL,
+  claim_id    VARCHAR(20)   NULL,
+  created_by  VARCHAR(40)   NULL,
+  created_at  DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  KEY idx_payments_invoice (invoice_id),
+  CONSTRAINT fk_payments_invoice FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+) ENGINE=InnoDB;
+
+-- Insurance, HMO and corporate claims: a batch of invoices sent to one payer.
+CREATE TABLE IF NOT EXISTS claims (
+  id               VARCHAR(20)   NOT NULL PRIMARY KEY,   -- CLM-1001
+  payer            VARCHAR(160)  NOT NULL,
+  payer_type       VARCHAR(40)   NOT NULL,
+  status           ENUM('Draft','Submitted','Approved','Rejected','Paid') NOT NULL DEFAULT 'Draft',
+  submitted_on     DATE          NULL,
+  reference        VARCHAR(80)   NULL,
+  approved_amount  DECIMAL(12,2) NULL,
+  received_amount  DECIMAL(12,2) NOT NULL DEFAULT 0,
+  rejection_reason VARCHAR(500)  NULL,
+  created_by       VARCHAR(40)   NULL,
+  created_at       DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS claim_lines (
+  id          BIGINT        NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  claim_id    VARCHAR(20)   NOT NULL,
+  invoice_id  VARCHAR(20)   NOT NULL,
+  patient_id  VARCHAR(20)   NOT NULL,
+  member_id   VARCHAR(80)   NULL,
+  amount      DECIMAL(12,2) NOT NULL,                    -- the invoice balance when the claim was made
+  KEY idx_claim_lines_claim (claim_id),
+  KEY idx_claim_lines_invoice (invoice_id),
+  KEY idx_claim_lines_patient (patient_id),
+  CONSTRAINT fk_claim_lines_claim FOREIGN KEY (claim_id) REFERENCES claims(id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS claim_events (
+  id        BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  claim_id  VARCHAR(20)  NOT NULL,
+  at        DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  by_name   VARCHAR(120) NOT NULL,
+  text      VARCHAR(500) NOT NULL,
+  KEY idx_claim_events_claim (claim_id),
+  CONSTRAINT fk_claim_events_claim FOREIGN KEY (claim_id) REFERENCES claims(id)
+) ENGINE=InnoDB;
+
+-- A copy of every duplicate registration that was merged away. Append-only, like the audit log.
+CREATE TABLE IF NOT EXISTS patient_merges (
+  id          BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  at          DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  by_user_id  VARCHAR(40)  NOT NULL,
+  by_name     VARCHAR(120) NOT NULL,
+  kept_id     VARCHAR(20)  NOT NULL,
+  removed_id  VARCHAR(20)  NOT NULL,
+  removed     JSON         NOT NULL,
+  moved       JSON         NOT NULL,
+  KEY idx_merges_kept (kept_id)
+) ENGINE=InnoDB;
+
 -- Clinical notes are never deleted. Corrections are addenda that point at the original.
 CREATE TABLE IF NOT EXISTS clinical_notes (
   id             VARCHAR(40)  NOT NULL PRIMARY KEY,
@@ -156,10 +251,3 @@ CREATE TABLE IF NOT EXISTS audit_head (
   last_hash CHAR(64) NOT NULL
 ) ENGINE=InnoDB;
 INSERT IGNORE INTO audit_head (id, last_seq, last_hash) VALUES (1, 0, REPEAT('0', 64));
-
-DROP TRIGGER IF EXISTS audit_log_no_update;
-CREATE TRIGGER audit_log_no_update BEFORE UPDATE ON audit_log FOR EACH ROW
-  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_log is append-only';
-DROP TRIGGER IF EXISTS audit_log_no_delete;
-CREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log FOR EACH ROW
-  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_log is append-only';

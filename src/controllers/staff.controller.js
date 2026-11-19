@@ -8,6 +8,11 @@ import { activeAdmins, emailTaken, getStaffRow, listStaff, newUserId, roleExists
 
 export const list = wrap(async (_req, res) => res.json({ users: await listStaff() }));
 
+export const directory = wrap(async (_req, res) => {
+  const rows = await query("SELECT id, name, role_id FROM users WHERE active = 1 ORDER BY name");
+  res.json({ staff: rows.map((r) => ({ id: r.id, name: r.name, roleId: r.role_id })) });
+});
+
 export const create = wrap(async (req, res) => {
   const d = req.body;
   if (!(await roleExists(d.roleId))) throw bad("That role doesn't exist.");
