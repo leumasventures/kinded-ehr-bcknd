@@ -8,6 +8,7 @@ import { createInvoiceBody, paymentBody } from "../validators/billing.validator.
 const router = Router();
 router.use(authenticate());
 
+router.get("/", requirePerm("Billing", "view"), c.list);
 router.get("/invoices", requirePerm("Billing", "view"), c.list);
 router.get("/totals", requirePerm("Billing", "view"), c.totals);
 router.get("/invoices/:id", requirePerm("Billing", "view"), c.get);
