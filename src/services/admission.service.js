@@ -5,7 +5,7 @@ import { conflict } from "../utils/errors.js";
 // patients.name holds the full name (as in billing.service.js).
 const PATIENT_NAME = "p.name";
 
-const FROM = `FROM admissions a LEFT JOIN patients p ON p.id = a.patient_id LEFT JOIN users d ON d.id = a.doctor_id`;
+const FROM = `FROM admissions a LEFT JOIN patients p ON p.id = a.patient_id COLLATE utf8mb4_unicode_ci LEFT JOIN users d ON d.id = a.doctor_id COLLATE utf8mb4_unicode_ci`;
 const LIST_COLS = `a.id, a.patient_id, ${PATIENT_NAME} AS patient_name, a.doctor_id, d.name AS doctor, a.ward, a.bed, a.status, a.admitted_at, a.discharged_at`;
 // The clinical text is only returned when one admission is opened, not in lists.
 const FULL_COLS = `${LIST_COLS}, a.reason, a.outcome, a.discharge_summary`;
