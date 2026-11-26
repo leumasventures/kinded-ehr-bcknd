@@ -18,6 +18,9 @@ export const config = {
     ssl: process.env.DB_SSL === "true",
   },
 
+  // Set AUTO_MIGRATE=true to create/upgrade tables every time the server starts (safe: every statement is IF NOT EXISTS).
+  autoMigrate: process.env.AUTO_MIGRATE === "true",
+
   jwtSecret: process.env.JWT_SECRET ?? "",
 
   corsOrigins: (process.env.CORS_ORIGINS ?? "")
