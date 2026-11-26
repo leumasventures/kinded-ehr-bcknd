@@ -9,6 +9,7 @@ const router = Router();
 router.use(authenticate());
 
 router.get("/", requirePerm("Patients", "view"), c.list);
+router.get("/stats", requirePerm("Patients", "view"), c.stats);
 router.get("/:id", requirePerm("Patients", "view"), c.get);
 router.post("/", requirePerm("Patients", "create"), validate(patientBody, "Check the patient's details."), c.create);
 router.put("/:id", requirePerm("Patients", "edit"), validate(patientBody, "Check the patient's details."), c.update);
