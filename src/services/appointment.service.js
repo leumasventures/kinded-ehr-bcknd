@@ -30,7 +30,7 @@ export const isLive = (status) => status !== "Cancelled" && status !== "No-show"
 
 export const getAppointment = async (id) => (await query(`${SELECT} WHERE a.id = ?`, [id]))[0];
 
-export async function listAppointments({ date, from, to, doctor, patientId, status, limit }) {
+export async function listAppointments({ date, from, to, doctor, patientId, status, newestFirst = false, limit }) {
   const where = [];
   const args = [];
   if (date) (where.push("a.appt_date = ?"), args.push(date));

@@ -14,7 +14,10 @@ const SCHEMA_FILES = [
   "laboratory.sql",
   "nursing.sql",
   "pharmacy.sql",
-  "admissions.sql", // last: needs stored generated columns (MySQL 8+, or MariaDB 10.2.5+)
+  "admissions.sql", // needs stored generated columns (MySQL 8+, or MariaDB 10.2.5+)
+  "settings.sql",
+  "doctor_profiles.sql",
+  "accounts.sql",
 ];
 
 /**

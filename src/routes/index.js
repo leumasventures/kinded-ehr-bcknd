@@ -19,6 +19,8 @@ import nursing from "./nursing.routes.js";
 import pharmacy from "./pharmacy.routes.js";
 import pricelist from "./pricelist.routes.js";
 import report from "./report.routes.js";
+import settings from "./settings.routes.js";
+import accounts from "./accounts.routes.js";
 
 const api = Router();
 api.use("/auth", auth);
@@ -42,5 +44,7 @@ api.use("/nursing", nursing);
 api.use("/pharmacy", pharmacy);
 api.use("/price-list", pricelist);
 api.use("/reports", report);
+api.use("/settings", settings);
+api.use("/accounts", accounts);
 
 export default api;
