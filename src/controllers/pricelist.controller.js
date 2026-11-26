@@ -6,7 +6,7 @@ const label = (i) => `${i.code} (${i.name})`;
 
 export const list = wrap(async (req, res) => {
   const { q, category, includeInactive } = req.query;
-  const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 1000);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 1000, 1), 2000);
   const items = await listItems({
     q: q ? String(q).slice(0, 80) : undefined,
     category: category ? String(category).slice(0, 60) : undefined,
@@ -25,14 +25,15 @@ export const get = wrap(async (req, res) => {
 });
 
 export const create = wrap(async (req, res) => {
-  if (await getByCode(req.body.code.toUpperCase())) throw conflict("An item with this code already exists.");
+  if (req.body.code && (await getByCode(req.body.code.toUpperCase()))) throw conflict("An item with this code already exists.");
   const row = await createItem(req.body);
   await audit(req, { action: "Create", module: "Price list", summary: `Added ${label(row)} in ${row.category} at ${Number(row.price).toFixed(2)}` });
   res.status(201).json({ item: itemOut(row) });
 });
 
 // Prices change going forward only: invoices keep the price they were issued with.
-// There is no delete, because invoices point at these items. Switch an item off instead.
+// "Delete" in the web app removes the item from the list (active = false) rather than erasing the row, so lab orders and
+// reports that refer to it keep their history. Setting active back to true restores it.
 export const update = wrap(async (req, res) => {
   const row = await getItem(req.params.id);
   if (!row) throw notFound("Price list item not found.");

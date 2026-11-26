@@ -1,19 +1,20 @@
 import { Router } from "express";
-import { authenticate, allow, validate } from "./guards.js";
+import { authenticate, requirePerm, validate } from "./guards.js";
 import * as c from "../controllers/dutyroster.controller.js";
 import { assignSchema, createSchema, updateSchema } from "../validators/dutyroster.validator.js";
 
 const r = Router();
 r.use(authenticate());
 
-// Anyone signed in can see the roster and their own shifts.
-r.get("/", c.list);
+// Everyone can see their own shifts and who is on duty today.
 r.get("/mine", c.mine);
 r.get("/on-duty", c.duty);
-// Only administrators change it.
-r.post("/", allow(), validate(createSchema), c.create);
-r.post("/assign", allow(), validate(assignSchema), c.assign);
-r.patch("/:id", allow(), validate(updateSchema), c.update);
-r.delete("/:id", allow(), c.remove);
+// The full roster, and changes to it, follow the Roster module.
+r.get("/", requirePerm("Roster", "view"), c.list);
+r.post("/", requirePerm("Roster", "create"), validate(createSchema), c.create);
+r.post("/assign", requirePerm("Roster", "create"), validate(assignSchema), c.assign);
+r.put("/:id", requirePerm("Roster", "edit"), validate(updateSchema), c.update);
+r.patch("/:id", requirePerm("Roster", "edit"), validate(updateSchema), c.update);
+r.delete("/:id", requirePerm("Roster", "delete"), c.remove);
 
 export default r;

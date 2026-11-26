@@ -1,19 +1,19 @@
 import { Router } from "express";
-import { authenticate, allow, validate, ACCESS } from "./guards.js";
+import { authenticate, requirePerm, validate } from "./guards.js";
 import * as c from "../controllers/laboratory.controller.js";
 import { cancelSchema, orderSchema, resultsSchema } from "../validators/laboratory.validator.js";
 
-const L = ACCESS.laboratory;
 const r = Router();
 r.use(authenticate());
 
-r.get("/", allow(...L.read), c.list);
-r.get("/tests", allow(...L.read, ...L.order), c.tests); // before /:id
-r.get("/:id", allow(...L.read), c.get);
-r.post("/", allow(...L.order), validate(orderSchema), c.create);
-r.post("/:id/collect", allow(...L.collect), c.collect);
-r.post("/:id/results", allow(...L.result), validate(resultsSchema), c.results);
-r.post("/:id/review", allow(...L.review), c.review);
-r.post("/:id/cancel", allow(...L.cancel), validate(cancelSchema), c.cancel);
+r.get("/", requirePerm("Laboratory", "view"), c.list);
+r.get("/tests", requirePerm("Laboratory", "view"), c.tests); // before /:id
+r.get("/:id", requirePerm("Laboratory", "view"), c.get);
+r.post("/", requirePerm("Laboratory", "create"), validate(orderSchema), c.create);
+// Collecting, resulting, reviewing and cancelling all change an order, so they need Laboratory "edit".
+r.post("/:id/collect", requirePerm("Laboratory", "edit"), c.collect);
+r.post("/:id/results", requirePerm("Laboratory", "edit"), validate(resultsSchema), c.results);
+r.post("/:id/review", requirePerm("Laboratory", "edit"), c.review);
+r.post("/:id/cancel", requirePerm("Laboratory", "edit"), validate(cancelSchema), c.cancel);
 
 export default r;

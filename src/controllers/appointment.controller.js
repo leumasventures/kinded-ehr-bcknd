@@ -11,6 +11,7 @@ const what = (a) => `${a.patient_name ?? a.patientName ?? a.patient} (${a.patien
 export const list = wrap(async (req, res) => {
   const { date, from, to, doctor, patientId, status } = req.query;
   const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 500);
+
   const appointments = await listAppointments({
     date: isDay(date) ? date : undefined,
     from: isDay(from) ? from : undefined,
@@ -18,8 +19,10 @@ export const list = wrap(async (req, res) => {
     doctor: doctor ? String(doctor).slice(0, 120) : undefined,
     patientId: patientId ? String(patientId).slice(0, 20) : undefined,
     status: STATUSES.includes(String(status)) ? String(status) : undefined,
+    newestFirst: req.query.sort === "desc",
     limit,
   });
+
   res.json({ appointments });
 });
 

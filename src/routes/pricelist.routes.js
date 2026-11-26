@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authenticate, allow, validate, ACCESS } from "./guards.js";
+import { authenticate, requirePerm, validate } from "./guards.js";
 import * as c from "../controllers/pricelist.controller.js";
 import { createSchema, updateSchema } from "../validators/pricelist.validator.js";
 
@@ -10,8 +10,13 @@ r.use(authenticate());
 r.get("/", c.list);
 r.get("/categories", c.categories); // before /:id
 r.get("/:id", c.get);
-// A price change affects every later invoice, so editing is limited.
-r.post("/", allow(...ACCESS.priceList.edit), validate(createSchema), c.create);
-r.patch("/:id", allow(...ACCESS.priceList.edit), validate(updateSchema), c.update);
+
+// The price list page uses the Billing permissions. Taking an item off the list ("Delete" on the page) is an update
+// with active: false, so it needs Billing "delete"; every other change needs Billing "edit".
+const changePerm = (req, res, next) => (req.body?.active === false ? requirePerm("Billing", "delete") : requirePerm("Billing", "edit"))(req, res, next);
+
+r.post("/", requirePerm("Billing", "create"), validate(createSchema), c.create);
+r.put("/:id", changePerm, validate(updateSchema), c.update);
+r.patch("/:id", changePerm, validate(updateSchema), c.update);
 
 export default r;

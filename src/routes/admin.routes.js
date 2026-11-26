@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { authenticate, allow } from "./guards.js";
+import { authenticate, requireAdmin } from "./guards.js";
 import * as c from "../controllers/admin.controller.js";
 
 const r = Router();
-r.use(authenticate(), allow()); // administrators only
+r.use(authenticate(), requireAdmin); // administrators only
 
 r.get("/overview", c.overview);
 r.get("/locked", c.lockedAccounts);
