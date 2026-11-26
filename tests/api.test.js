@@ -296,6 +296,8 @@ test("audit log: written by the server, filterable, admin-only, tamper-evident a
   await db.end();
 });
 
+const book0 = (token, patientId, doctor) => api("POST", "/appointments", { token, body: { patientId, doctor, date: "2030-03-04", time: "09:00", type: "General consultation" } });
+
 test("appointments: registered patients only, no double booking, status rules, permissions, nothing clinical in the log", async () => {
   const admin = (await login(ADMIN.email, ADMIN.password)).accessToken;
   const doctor = (await newStaff(admin, "Dr Appt Tester", "appt.doctor@test.local", "r-doctor")).accessToken;
@@ -303,6 +305,8 @@ test("appointments: registered patients only, no double booking, status rules, p
   const pat = await api("POST", "/patients", { token: admin, body: { name: "Appt Patient", dob: "1985-02-02", gender: "Male", phone: "0901 555 0001" } });
   assert.equal(pat.status, 201);
   const pid = pat.body.patient.id;
+  for (const name of ["Dr. Eze", "Dr. Obi"]) assert.equal((await api("POST", "/doctors", { token: admin, body: { name, days: [1, 2, 3, 4, 5], start: "08:00", end: "16:00" } })).status, 201);
+  assert.equal((await book0(admin, pid, "Dr. Nobody")).status, 404, "a doctor who isn't in the directory can't be booked");
   const day = "2030-03-04";
   const book = (body, token = admin) => api("POST", "/appointments", { token, body: { patientId: pid, doctor: "Dr. Eze", date: day, time: "09:00", type: "General consultation", ...body } });
 

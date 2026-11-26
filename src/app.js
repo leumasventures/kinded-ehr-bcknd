@@ -8,7 +8,7 @@ import { errorHandler, notFoundHandler } from "./middleware/error.middleware.js"
 
 export function createApp() {
   const app = express();
-  app.set("trust proxy", 1); // the host sits behind one proxy, so req.ip is the real caller
+  app.set("trust proxy", 1); // Render sits behind one proxy, so req.ip is the real caller
   app.disable("x-powered-by");
   app.use(helmet());
   app.use(

@@ -251,3 +251,156 @@ CREATE TABLE IF NOT EXISTS audit_head (
   last_hash CHAR(64) NOT NULL
 ) ENGINE=InnoDB;
 INSERT IGNORE INTO audit_head (id, last_seq, last_hash) VALUES (1, 0, REPEAT('0', 64));
+
+-- ---------- Doctors ----------
+-- Appointments and admissions refer to a doctor by name, so the name is unique and a doctor who has history can't be deleted.
+CREATE TABLE IF NOT EXISTS doctors (
+  id         VARCHAR(20)  NOT NULL PRIMARY KEY,   -- DR-01
+  name       VARCHAR(120) NOT NULL,
+  specialty  VARCHAR(120) NOT NULL DEFAULT '',
+  phone      VARCHAR(40)  NOT NULL DEFAULT '',
+  email      VARCHAR(160) NOT NULL DEFAULT '',
+  days       VARCHAR(20)  NOT NULL DEFAULT '1,2,3,4,5',   -- 0 = Sunday ... 6 = Saturday
+  start_time CHAR(5)      NOT NULL DEFAULT '08:00',
+  end_time   CHAR(5)      NOT NULL DEFAULT '16:00',
+  status     ENUM('Available','In Surgery','On Leave') NOT NULL DEFAULT 'Available',
+  created_by VARCHAR(40)  NULL,
+  created_at DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uq_doctor_name (name)
+) ENGINE=InnoDB;
+
+-- ---------- Duty roster ----------
+-- One shift per person per day. Name and role are copied from the staff record by the server when the shift is made.
+CREATE TABLE IF NOT EXISTS roster_shifts (
+  id         BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  shift_date DATE         NOT NULL,
+  staff_id   VARCHAR(40)  NOT NULL,
+  staff_name VARCHAR(120) NOT NULL,
+  staff_role VARCHAR(80)  NOT NULL DEFAULT '',
+  shift      ENUM('Morning','Afternoon','Night','On call','Leave') NOT NULL,
+  unit       VARCHAR(60)  NOT NULL DEFAULT '',
+  note       VARCHAR(255) NOT NULL DEFAULT '',
+  created_by VARCHAR(40)  NULL,
+  created_at DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uq_roster_person_day (staff_id, shift_date),
+  KEY idx_roster_date (shift_date)
+) ENGINE=InnoDB;
+
+-- ---------- Admissions ----------
+CREATE TABLE IF NOT EXISTS admissions (
+  id             VARCHAR(20)  NOT NULL PRIMARY KEY,   -- ADM-1001
+  patient_id     VARCHAR(20)  NOT NULL,
+  ward           VARCHAR(40)  NOT NULL,
+  bed            VARCHAR(10)  NOT NULL,
+  admitted_on    DATE         NOT NULL,
+  doctor         VARCHAR(120) NOT NULL,
+  diagnosis      VARCHAR(255) NOT NULL DEFAULT '',
+  status         ENUM('Admitted','Discharged') NOT NULL DEFAULT 'Admitted',
+  discharged_on  DATE         NULL,
+  outcome        VARCHAR(60)  NULL,
+  discharge_notes VARCHAR(500) NULL,
+  created_by     VARCHAR(40)  NULL,
+  created_at     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  KEY idx_adm_patient (patient_id),
+  KEY idx_adm_status (status, ward),
+  CONSTRAINT fk_adm_patient FOREIGN KEY (patient_id) REFERENCES patients(id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS admission_moves (
+  id           BIGINT      NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  admission_id VARCHAR(20) NOT NULL,
+  at           DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  from_ward    VARCHAR(40) NOT NULL,
+  from_bed     VARCHAR(10) NOT NULL,
+  to_ward      VARCHAR(40) NOT NULL,
+  to_bed       VARCHAR(10) NOT NULL,
+  by_name      VARCHAR(120) NOT NULL,
+  KEY idx_moves_adm (admission_id),
+  CONSTRAINT fk_moves_adm FOREIGN KEY (admission_id) REFERENCES admissions(id)
+) ENGINE=InnoDB;
+
+-- ---------- Accounts ----------
+CREATE TABLE IF NOT EXISTS money_accounts (
+  id             VARCHAR(20)   NOT NULL PRIMARY KEY,   -- ACC-01
+  name           VARCHAR(120)  NOT NULL,
+  kind           ENUM('Cash','Bank','POS / Mobile money') NOT NULL,
+  bank_name      VARCHAR(120)  NOT NULL DEFAULT '',
+  account_number VARCHAR(40)   NOT NULL DEFAULT '',
+  opening        DECIMAL(14,2) NOT NULL DEFAULT 0,
+  opening_date   DATE          NOT NULL,
+  active         TINYINT(1)    NOT NULL DEFAULT 1,
+  UNIQUE KEY uq_money_account_name (name)
+) ENGINE=InnoDB;
+
+-- Money is never edited or deleted once recorded. A mistake is voided (kept, with who/when/why) and re-entered.
+CREATE TABLE IF NOT EXISTS transactions (
+  id            VARCHAR(20)   NOT NULL PRIMARY KEY,   -- TXN-1001
+  txn_date      DATE          NOT NULL,
+  type          ENUM('Income','Expense','Transfer') NOT NULL,
+  category      VARCHAR(80)   NOT NULL DEFAULT '',
+  description   VARCHAR(255)  NOT NULL DEFAULT '',
+  party         VARCHAR(160)  NOT NULL DEFAULT '',
+  reference     VARCHAR(80)   NOT NULL DEFAULT '',
+  amount        DECIMAL(14,2) NOT NULL,
+  account_id    VARCHAR(20)   NOT NULL,
+  to_account_id VARCHAR(20)   NULL,
+  source        ENUM('manual','billing','payroll') NOT NULL DEFAULT 'manual',
+  recorded_by   VARCHAR(120)  NOT NULL,
+  recorded_at   DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  void_at       DATETIME(3)   NULL,
+  void_by       VARCHAR(120)  NULL,
+  void_reason   VARCHAR(255)  NULL,
+  KEY idx_txn_date (txn_date),
+  KEY idx_txn_account (account_id),
+  CONSTRAINT fk_txn_account FOREIGN KEY (account_id) REFERENCES money_accounts(id),
+  CONSTRAINT fk_txn_to_account FOREIGN KEY (to_account_id) REFERENCES money_accounts(id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS employees (
+  id              VARCHAR(20)   NOT NULL PRIMARY KEY,   -- EMP-01
+  name            VARCHAR(120)  NOT NULL,
+  title           VARCHAR(120)  NOT NULL DEFAULT '',
+  department      VARCHAR(120)  NOT NULL DEFAULT '',
+  bank_name       VARCHAR(120)  NOT NULL DEFAULT '',
+  account_number  VARCHAR(40)   NOT NULL DEFAULT '',
+  basic           DECIMAL(14,2) NOT NULL DEFAULT 0,
+  housing         DECIMAL(14,2) NOT NULL DEFAULT 0,
+  transport       DECIMAL(14,2) NOT NULL DEFAULT 0,
+  other_allowance DECIMAL(14,2) NOT NULL DEFAULT 0,
+  pension_pct     DECIMAL(5,2)  NOT NULL DEFAULT 8,
+  paye            DECIMAL(14,2) NOT NULL DEFAULT 0,
+  other_deduction DECIMAL(14,2) NOT NULL DEFAULT 0,
+  active          TINYINT(1)    NOT NULL DEFAULT 1
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS payroll_runs (
+  id                 VARCHAR(20)  NOT NULL PRIMARY KEY,   -- PAY-2026-11
+  month              CHAR(7)      NOT NULL,
+  status             ENUM('Draft','Paid') NOT NULL DEFAULT 'Draft',
+  paid_on            DATE         NULL,
+  paid_from_account  VARCHAR(20)  NULL,
+  paid_by            VARCHAR(120) NULL,
+  txn_id             VARCHAR(20)  NULL,
+  remitted_on        DATE         NULL,
+  remittance_txn_id  VARCHAR(20)  NULL,
+  created_at         DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uq_payroll_month (month)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS payroll_lines (
+  id          BIGINT        NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  run_id      VARCHAR(20)   NOT NULL,
+  employee_id VARCHAR(20)   NOT NULL,
+  name        VARCHAR(120)  NOT NULL,
+  title       VARCHAR(120)  NOT NULL DEFAULT '',
+  basic       DECIMAL(14,2) NOT NULL,
+  allowances  DECIMAL(14,2) NOT NULL,
+  bonus       DECIMAL(14,2) NOT NULL DEFAULT 0,
+  gross       DECIMAL(14,2) NOT NULL,
+  pension     DECIMAL(14,2) NOT NULL,
+  paye        DECIMAL(14,2) NOT NULL,
+  other       DECIMAL(14,2) NOT NULL,
+  net         DECIMAL(14,2) NOT NULL,
+  KEY idx_pl_run (run_id),
+  CONSTRAINT fk_pl_run FOREIGN KEY (run_id) REFERENCES payroll_runs(id)
+) ENGINE=InnoDB;

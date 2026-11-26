@@ -1,14 +1,10 @@
 import { Router } from "express";
-import { authenticate, requireAdmin } from "./guards.js";
 import * as c from "../controllers/admin.controller.js";
+import { authenticate } from "../middleware/auth.middleware.js";
+import { requireAdmin } from "../middleware/permission.middleware.js";
 
-const r = Router();
-r.use(authenticate(), requireAdmin); // administrators only
-
-r.get("/overview", c.overview);
-r.get("/locked", c.lockedAccounts);
-r.get("/stale", c.staleAccounts);
-r.post("/users/:id/unlock", c.unlock);
-r.post("/users/:id/sign-out", c.signOut);
-
-export default r;
+const router = Router();
+router.use(authenticate());
+router.use(requireAdmin);
+router.get("/dashboard", c.getDashboard);
+export default router;

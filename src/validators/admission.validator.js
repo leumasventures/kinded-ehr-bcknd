@@ -1,28 +1,33 @@
 import { z } from "zod";
+import { isoDate } from "./common.validator.js";
 
-export const STATUSES = ["Admitted", "Discharged"];
-export const OUTCOMES = ["Recovered", "Improved", "Referred", "Left against advice", "Deceased"];
+export const WARDS = [
+  { name: "General Ward", prefix: "G", beds: 30 },
+  { name: "Maternity", prefix: "M", beds: 15 },
+  { name: "Pediatrics", prefix: "P", beds: 20 },
+  { name: "ICU", prefix: "I", beds: 8 },
+];
+export const OUTCOMES = ["Recovered / improved", "Referred to another facility", "Discharged against medical advice", "Deceased"];
+export const wardNamed = (n) => WARDS.find((w) => w.name === n);
+export const bedsOf = (ward) => {
+  const w = wardNamed(ward);
+  return w ? Array.from({ length: w.beds }, (_, i) => `${w.prefix}-${String(i + 1).padStart(2, "0")}`) : [];
+};
 
-const blank = (v) => (typeof v === "string" && v.trim() === "" ? null : v);
-const opt = (max) => z.preprocess(blank, z.string().trim().max(max).nullish());
-const reason = z.string().trim().min(1, "Give the reason for admission.").max(2000);
-const bedNeedsWard = { message: "Choose a ward for that bed.", path: ["bed"] };
+const ward = z.string().refine((w) => !!wardNamed(w), "Choose a ward");
+const bed = z.string().trim().min(1, "Choose a bed").max(10);
 
-export const createSchema = z
-  .object({
-    patientId: z.string().trim().min(1, "Choose a patient.").max(20),
-    doctorId: opt(40),
-    ward: opt(60),
-    bed: opt(30),
-    reason,
-  })
-  .refine((d) => !d.bed || d.ward, bedNeedsWard);
-
-export const updateSchema = z
-  .object({ doctorId: opt(40), ward: opt(60), bed: opt(30), reason: reason.optional() })
-  .refine((d) => Object.keys(d).length > 0, { message: "Nothing to update." });
-
-export const dischargeSchema = z.object({
-  outcome: z.enum(OUTCOMES, { message: "Choose the outcome." }),
-  summary: opt(4000),
+export const admitBody = z.object({
+  patientId: z.string().trim().min(1, "Choose a registered patient").max(20),
+  ward,
+  bed,
+  doctor: z.string().trim().min(2, "Choose a doctor").max(120),
+  diagnosis: z.string().trim().max(255).default(""),
+  admittedOn: isoDate.optional(),
+});
+export const transferBody = z.object({ ward, bed });
+export const dischargeBody = z.object({
+  outcome: z.enum(OUTCOMES, { errorMap: () => ({ message: "Choose an outcome" }) }),
+  notes: z.string().trim().max(500).default(""),
+  dischargedOn: isoDate.optional(),
 });

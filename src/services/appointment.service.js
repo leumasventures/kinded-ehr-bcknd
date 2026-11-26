@@ -30,7 +30,7 @@ export const isLive = (status) => status !== "Cancelled" && status !== "No-show"
 
 export const getAppointment = async (id) => (await query(`${SELECT} WHERE a.id = ?`, [id]))[0];
 
-export async function listAppointments({ date, from, to, doctor, patientId, status, newestFirst = false, limit }) {
+export async function listAppointments({ date, from, to, doctor, patientId, status, limit }) {
   const where = [];
   const args = [];
   if (date) (where.push("a.appt_date = ?"), args.push(date));
@@ -39,7 +39,7 @@ export async function listAppointments({ date, from, to, doctor, patientId, stat
   if (doctor) (where.push("a.doctor = ?"), args.push(doctor));
   if (patientId) (where.push("a.patient_id = ?"), args.push(patientId));
   if (status) (where.push("a.status = ?"), args.push(status));
-  const rows = await query(`${SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY ${newestFirst ? "a.appt_date DESC, a.appt_time DESC, a.id DESC" : "a.appt_date, a.appt_time, a.id"} LIMIT ?`, [...args, limit]);
+  const rows = await query(`${SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY a.appt_date, a.appt_time, a.id LIMIT ?`, [...args, limit]);
   return rows.map(appointmentOut);
 }
 

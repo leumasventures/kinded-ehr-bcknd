@@ -1,58 +1,82 @@
-import { query } from "../config/database.js";
 import { bad, notFound, wrap } from "../utils/errors.js";
 import { audit } from "../services/audit.service.js";
-import { hashPassword, checkPassword } from "../services/password.service.js";
-import { revokeUserTokens } from "../services/token.service.js";
-import { getStaffRow, staffOut } from "../services/user.service.js";
+import * as svc from "../services/account.service.js";
 
-// The signed-in person managing their own account. Email, role and privileges are not editable here:
-// those stay with administrators (users.controller.js), so nobody can promote themselves.
+const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s ?? ""));
+const money = (n) => Number(n).toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const MIN_PASSWORD = 10;
-const MAX_PASSWORD = 128;
-
-async function mine(req) {
-  const row = await getStaffRow(req.user.id);
+// ---- money accounts ----
+export const listAccounts = wrap(async (_req, res) => res.json({ accounts: await svc.listAccounts() }));
+export const createAccount = wrap(async (req, res) => {
+  const account = await svc.createAccount(req.body);
+  await audit(req, { action: "Create", module: "Accounts", summary: `Opened money account ${account.name} (${account.id}), opening balance ${money(account.opening)}` });
+  res.status(201).json({ account });
+});
+export const updateAccount = wrap(async (req, res) => {
+  const row = await svc.getAccountRow(req.params.id);
   if (!row) throw notFound("Account not found.");
-  return row;
-}
-
-export const me = wrap(async (req, res) => {
-  res.json({ user: staffOut(await mine(req)) });
+  const account = await svc.updateAccount(row, req.body);
+  await audit(req, { action: "Update", module: "Accounts", summary: `Updated money account ${row.name} (${row.id}): ${Object.keys(req.body).join(", ")}` });
+  res.json({ account });
 });
 
-export const updateProfile = wrap(async (req, res) => {
-  const d = req.body;
-  const row = await mine(req);
-  const sets = [];
-  const vals = [];
-  const changed = [];
-  if (d.name !== undefined && d.name !== row.name) (sets.push("name = ?"), vals.push(d.name), changed.push("name"));
-  if (d.phone !== undefined && (d.phone || null) !== (row.phone ?? null)) (sets.push("phone = ?"), vals.push(d.phone || null), changed.push("phone"));
-  if (sets.length === 0) return res.json({ user: staffOut(row) });
-  await query(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`, [...vals, row.id]);
-  // Only the field names are logged, never the values.
-  await audit(req, { action: "Update", module: "Account", summary: `${row.name} (${row.email}) updated their own profile; changed: ${changed.join(", ")}` });
-  res.json({ user: staffOut(await getStaffRow(row.id)) });
+// ---- ledger ----
+export const listTxns = wrap(async (req, res) => {
+  const { from, to, accountId, type } = req.query;
+  res.json({ txns: await svc.listTxns({ from: isDay(from) ? from : undefined, to: isDay(to) ? to : undefined, accountId: accountId ? String(accountId).slice(0, 20) : undefined, type: ["Income", "Expense", "Transfer"].includes(String(type)) ? String(type) : undefined, limit: req.query.limit }) });
+});
+export const createTxn = wrap(async (req, res) => {
+  const txn = await svc.createTxn(req.body, req.user);
+  await audit(req, { action: "Create", module: "Accounts", summary: `Recorded ${txn.type.toLowerCase()} ${txn.id}: ${money(txn.amount)}${txn.category ? ` (${txn.category})` : ""}` });
+  res.status(201).json({ txn });
+});
+export const voidTxn = wrap(async (req, res) => {
+  const txn = await svc.voidTxn(req.params.id, req.body.reason, req.user);
+  await audit(req, { action: "Void", module: "Accounts", summary: `Voided ${txn.type.toLowerCase()} ${txn.id} of ${money(txn.amount)}: ${req.body.reason}` });
+  res.json({ txn });
+});
+export const summary = wrap(async (req, res) => {
+  const { from, to } = req.query;
+  if (!isDay(from) || !isDay(to)) throw bad("Give the period as ?from=YYYY-MM-DD&to=YYYY-MM-DD.");
+  res.json(await svc.summary({ from, to }));
 });
 
-export const changePassword = wrap(async (req, res) => {
-  const { currentPassword, newPassword } = req.body;
-  const row = await mine(req);
-  const [secret] = await query("SELECT password_hash FROM users WHERE id = ?", [row.id]);
+// ---- employees ----
+export const listEmployees = wrap(async (_req, res) => res.json({ employees: await svc.listEmployees() }));
+export const createEmployee = wrap(async (req, res) => {
+  const employee = await svc.createEmployee(req.body);
+  await audit(req, { action: "Create", module: "Accounts", summary: `Added employee ${employee.name} (${employee.id}) to payroll` }); // pay details stay out of the log
+  res.status(201).json({ employee });
+});
+export const updateEmployee = wrap(async (req, res) => {
+  const row = await svc.getEmployeeRow(req.params.id);
+  if (!row) throw notFound("Employee not found.");
+  const employee = await svc.updateEmployee(row, req.body);
+  await audit(req, { action: "Update", module: "Accounts", summary: `Updated payroll details of ${row.name} (${row.id}): ${Object.keys(req.body).join(", ")}` });
+  res.json({ employee });
+});
+export const deleteEmployee = wrap(async (req, res) => {
+  const row = await svc.getEmployeeRow(req.params.id);
+  if (!row) throw notFound("Employee not found.");
+  await svc.deleteEmployee(row);
+  await audit(req, { action: "Delete", module: "Accounts", summary: `Removed employee ${row.name} (${row.id}) from payroll` });
+  res.json({ ok: true });
+});
 
-  if (!(await checkPassword(currentPassword, secret.password_hash))) {
-    await audit(req, { action: "Security", module: "Account", summary: `${row.name} (${row.email}) gave the wrong current password while trying to change it` });
-    throw bad("Your current password isn't right.");
-  }
-  if (newPassword.length < MIN_PASSWORD) throw bad(`Choose a password of at least ${MIN_PASSWORD} characters.`);
-  if (newPassword.length > MAX_PASSWORD) throw bad(`Choose a password of at most ${MAX_PASSWORD} characters.`);
-  if (newPassword === currentPassword) throw bad("Choose a password you haven't been using.");
-  if (newPassword.toLowerCase() === String(row.email).toLowerCase()) throw bad("Your password can't be your email address.");
-
-  await query("UPDATE users SET password_hash = ?, must_change_password = 0, failed_logins = 0, locked_until = NULL WHERE id = ?", [await hashPassword(newPassword), row.id]);
-  // Ends every session, this one included, so a stolen token stops working. The app should send them to sign in again.
-  await revokeUserTokens(row.id);
-  await audit(req, { action: "Security", module: "Account", summary: `${row.name} (${row.email}) changed their own password` });
-  res.json({ ok: true, signedOut: true });
+// ---- payroll ----
+export const listRuns = wrap(async (_req, res) => res.json({ runs: await svc.listRuns() }));
+export const prepareRun = wrap(async (req, res) => {
+  const run = await svc.prepareRun(req.body.month, req.body.bonuses);
+  await audit(req, { action: "Create", module: "Accounts", summary: `Prepared payroll for ${run.month}: ${run.lines.length} employees, net ${money(run.totals.net)}` });
+  res.status(201).json({ run });
+});
+export const payRun = wrap(async (req, res) => {
+  const run = await svc.payRun(req.params.id, req.body, req.user);
+  await audit(req, { action: "Payment", module: "Accounts", summary: `Paid salaries for ${run.month}: ${money(run.totals.net)} (${run.txnId})` });
+  res.json({ run });
+});
+export const remitRun = wrap(async (req, res) => {
+  const run = await svc.remitRun(req.params.id, req.body, req.user);
+  await audit(req, { action: "Payment", module: "Accounts", summary: `Remitted pension and PAYE for ${run.month}: ${money(run.totals.pension + run.totals.paye)} (${run.remittanceTxnId})` });
+  res.json({ run });
 });

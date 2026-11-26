@@ -1,111 +1,106 @@
-import { randomUUID } from "node:crypto";
-import { query } from "../config/database.js";
-import { conflict } from "../utils/errors.js";
+import { query, tx } from "../config/database.js";
+import { bad, conflict, notFound } from "../utils/errors.js";
+import { WARDS, bedsOf, wardNamed } from "../validators/admission.validator.js";
+import { lockName, nextCounter, todayISO } from "./ids.js";
 
-// patients.name holds the full name (as in billing.service.js).
-const PATIENT_NAME = "p.name";
-
-const FROM = `FROM admissions a LEFT JOIN patients p ON p.id = a.patient_id COLLATE utf8mb4_unicode_ci LEFT JOIN users d ON d.id = a.doctor_id COLLATE utf8mb4_unicode_ci`;
-const LIST_COLS = `a.id, a.patient_id, ${PATIENT_NAME} AS patient_name, a.doctor_id, d.name AS doctor, a.ward, a.bed, a.status, a.admitted_at, a.discharged_at`;
-// The clinical text is only returned when one admission is opened, not in lists.
-const FULL_COLS = `${LIST_COLS}, a.reason, a.outcome, a.discharge_summary`;
+const SELECT = "SELECT a.*, p.name AS patient_name FROM admissions a JOIN patients p ON p.id = a.patient_id";
 
 export const admissionOut = (r) => ({
   id: r.id,
   patientId: r.patient_id,
-  patientName: r.patient_name ?? null,
-  doctorId: r.doctor_id ?? null,
-  doctor: r.doctor ?? null,
-  ward: r.ward ?? null,
-  bed: r.bed ?? null,
+  patient: r.patient_name,
+  ward: r.ward,
+  bed: r.bed,
+  admittedOn: r.admitted_on,
+  doctor: r.doctor,
+  diagnosis: r.diagnosis,
   status: r.status,
-  admittedAt: r.admitted_at,
-  dischargedAt: r.discharged_at ?? null,
-  ...("reason" in r ? { reason: r.reason, outcome: r.outcome ?? null, dischargeSummary: r.discharge_summary ?? null } : {}),
+  dischargedOn: r.discharged_on ?? undefined,
+  outcome: r.outcome ?? undefined,
+  dischargeNotes: r.discharge_notes ?? undefined,
 });
 
-export async function getAdmission(id) {
-  const [row] = await query(`SELECT ${FULL_COLS} ${FROM} WHERE a.id = ?`, [id]);
-  return row;
-}
-
-export async function listAdmissions({ status, ward, doctorId, patientId, limit }) {
+export async function listAdmissions({ status, ward, patientId, limit = 300 } = {}) {
   const where = [];
-  const vals = [];
-  if (status) (where.push("a.status = ?"), vals.push(status));
-  if (ward) (where.push("a.ward = ?"), vals.push(ward));
-  if (doctorId) (where.push("a.doctor_id = ?"), vals.push(doctorId));
-  if (patientId) (where.push("a.patient_id = ?"), vals.push(patientId));
-  const rows = await query(
-    `SELECT ${LIST_COLS} ${FROM} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY a.admitted_at DESC LIMIT ${Number(limit) | 0}`,
-    vals
-  );
+  const args = [];
+  if (status) (where.push("a.status = ?"), args.push(status));
+  if (ward) (where.push("a.ward = ?"), args.push(ward));
+  if (patientId) (where.push("a.patient_id = ?"), args.push(patientId));
+  const rows = await query(`${SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY a.status = 'Admitted' DESC, a.admitted_on DESC, a.id DESC LIMIT ${Math.min(Math.max(Number(limit) || 300, 1), 500)}`, args);
   return rows.map(admissionOut);
 }
 
-export async function wardCensus() {
-  const rows = await query("SELECT COALESCE(ward, 'Unassigned') AS ward, COUNT(*) AS occupied FROM admissions WHERE status = 'Admitted' GROUP BY ward ORDER BY ward");
-  return rows.map((r) => ({ ward: r.ward, occupied: Number(r.occupied) }));
+export const getAdmissionRow = async (id, conn = null) => ((conn ? (await conn.query(`${SELECT} WHERE a.id = ?`, [id]))[0] : await query(`${SELECT} WHERE a.id = ?`, [id])))[0];
+
+export async function history(id) {
+  const rows = await query("SELECT * FROM admission_moves WHERE admission_id = ? ORDER BY id", [id]);
+  return rows.map((m) => ({ at: m.at, from: `${m.from_ward} ${m.from_bed}`, to: `${m.to_ward} ${m.to_bed}`, by: m.by_name }));
 }
 
-export async function doctorExists(id) {
-  const [row] = await query("SELECT id FROM users WHERE id = ? AND active = 1", [id]);
-  return !!row;
+/** Every ward with its beds and who is in each one right now. */
+export async function occupancy() {
+  const rows = await query(`${SELECT} WHERE a.status = 'Admitted'`);
+  return WARDS.map((w) => {
+    const here = rows.filter((r) => r.ward === w.name);
+    const taken = new Map(here.map((r) => [r.bed, r]));
+    return {
+      ward: w.name,
+      total: w.beds,
+      occupied: here.length,
+      free: w.beds - here.length,
+      beds: bedsOf(w.name).map((bed) => ({ bed, admissionId: taken.get(bed)?.id ?? null, patientId: taken.get(bed)?.patient_id ?? null, patient: taken.get(bed)?.patient_name ?? null })),
+    };
+  });
 }
 
-async function bedHolder(ward, bed, exceptId = "") {
-  if (!ward || !bed) return null;
-  const [row] = await query("SELECT id FROM admissions WHERE status = 'Admitted' AND ward = ? AND bed = ? AND id <> ?", [ward, bed, exceptId]);
-  return row ?? null;
+async function assertBedFree(conn, ward, bed, exceptId = "") {
+  if (!bedsOf(ward).includes(bed)) throw bad(`${bed} isn't a bed in ${ward}.`);
+  const [taken] = await conn.query("SELECT id FROM admissions WHERE ward = ? AND bed = ? AND status = 'Admitted' AND id <> ?", [ward, bed, exceptId]);
+  if (taken.length) throw conflict(`Bed ${bed} in ${ward} is already taken.`, { code: "bed_taken" });
 }
 
-// The unique keys on admissions are the real guard against two people grabbing the same bed at once.
-// The checks above give friendly messages; this turns the database's refusal into the same kind of message.
-const raced = (e) => (e?.errno === 1062 ? conflict("That bed was just taken, or this patient was just admitted. Refresh and check.") : e);
-
-export async function createAdmission(d, userId) {
-  const [open] = await query("SELECT id FROM admissions WHERE patient_id = ? AND status = 'Admitted'", [d.patientId]);
-  if (open) throw conflict("This patient is already admitted.");
-  if (await bedHolder(d.ward, d.bed)) throw conflict(`Bed ${d.bed} in ${d.ward} is occupied.`);
-  const id = randomUUID();
-  try {
-    await query("INSERT INTO admissions (id, patient_id, doctor_id, ward, bed, reason, status, admitted_at, created_by) VALUES (?,?,?,?,?,?, 'Admitted', NOW(), ?)", [id, d.patientId, d.doctorId || null, d.ward || null, d.bed || null, d.reason, userId]);
-  } catch (e) {
-    throw raced(e);
-  }
-  return getAdmission(id);
+export async function admit({ patientId, ward, bed, doctor, diagnosis, admittedOn = todayISO() }, by) {
+  if (admittedOn > todayISO()) throw bad("The admission date can't be in the future.");
+  const id = await tx(async (conn) => {
+    const [pat] = await conn.query("SELECT id FROM patients WHERE id = ? FOR UPDATE", [patientId]); // queues two admissions of the same patient
+    if (!pat.length) throw bad("That patient isn't registered. Register the patient first.");
+    const [dr] = await conn.query("SELECT id FROM doctors WHERE name = ?", [doctor]);
+    if (!dr.length) throw bad("That doctor isn't in the directory. Add the doctor under Doctors first.");
+    const [already] = await conn.query("SELECT id, ward, bed FROM admissions WHERE patient_id = ? AND status = 'Admitted'", [patientId]);
+    if (already.length) throw conflict(`This patient is already admitted (${already[0].ward}, bed ${already[0].bed}).`, { code: "already_admitted" });
+    await lockName(conn, `ward:${ward}`);
+    await assertBedFree(conn, ward, bed);
+    const aid = `ADM-${await nextCounter(conn, "admission", 1000)}`;
+    await conn.query("INSERT INTO admissions (id, patient_id, ward, bed, admitted_on, doctor, diagnosis, created_by) VALUES (?,?,?,?,?,?,?,?)", [aid, patientId, ward, bed, admittedOn, doctor, diagnosis, by.id]);
+    return aid;
+  });
+  return admissionOut(await getAdmissionRow(id));
 }
 
-const COLUMNS = { doctorId: "doctor_id", ward: "ward", bed: "bed", reason: "reason" };
-
-/** Applies only what changed. Returns the names of the fields that changed. */
-export async function updateAdmission(row, d) {
-  const current = { doctorId: row.doctor_id, ward: row.ward, bed: row.bed, reason: row.reason };
-  const sets = [];
-  const vals = [];
-  const changed = [];
-  for (const [key, col] of Object.entries(COLUMNS)) {
-    if (d[key] === undefined) continue;
-    const v = d[key] === "" ? null : d[key];
-    if (v === (current[key] ?? null)) continue;
-    sets.push(`${col} = ?`);
-    vals.push(v);
-    changed.push(key);
-  }
-  if (sets.length === 0) return [];
-  const ward = d.ward !== undefined ? d.ward || null : row.ward;
-  const bed = d.bed !== undefined ? d.bed || null : row.bed;
-  if (bed && !ward) throw conflict("Choose a ward for that bed.");
-  if ((changed.includes("ward") || changed.includes("bed")) && (await bedHolder(ward, bed, row.id))) throw conflict(`Bed ${bed} in ${ward} is occupied.`);
-  try {
-    await query(`UPDATE admissions SET ${sets.join(", ")} WHERE id = ?`, [...vals, row.id]);
-  } catch (e) {
-    throw raced(e);
-  }
-  return changed;
+export async function transfer(id, { ward, bed }, by) {
+  await tx(async (conn) => {
+    await lockName(conn, `ward:${ward}`);
+    const [[a]] = await conn.query("SELECT * FROM admissions WHERE id = ? FOR UPDATE", [id]);
+    if (!a) throw notFound("Admission not found.");
+    if (a.status !== "Admitted") throw conflict("A discharged patient can't be moved.");
+    if (a.ward === ward && a.bed === bed) throw bad("The patient is already in that bed.");
+    await assertBedFree(conn, ward, bed, id);
+    await conn.query("UPDATE admissions SET ward = ?, bed = ? WHERE id = ?", [ward, bed, id]);
+    await conn.query("INSERT INTO admission_moves (admission_id, from_ward, from_bed, to_ward, to_bed, by_name) VALUES (?,?,?,?,?,?)", [id, a.ward, a.bed, ward, bed, by.name]);
+  });
+  return admissionOut(await getAdmissionRow(id));
 }
 
-// Discharging frees the bed and the patient automatically: the unique keys only apply while status is 'Admitted'.
-export async function dischargeAdmission(row, d) {
-  await query("UPDATE admissions SET status = 'Discharged', discharged_at = NOW(), outcome = ?, discharge_summary = ? WHERE id = ? AND status = 'Admitted'", [d.outcome, d.summary || null, row.id]);
+export async function discharge(id, { outcome, notes = "", dischargedOn = todayISO() }) {
+  await tx(async (conn) => {
+    const [[a]] = await conn.query("SELECT * FROM admissions WHERE id = ? FOR UPDATE", [id]);
+    if (!a) throw notFound("Admission not found.");
+    if (a.status !== "Admitted") throw conflict("This patient has already been discharged.");
+    if (dischargedOn < a.admitted_on) throw bad("The discharge date can't be before the admission date.");
+    if (dischargedOn > todayISO()) throw bad("The discharge date can't be in the future.");
+    await conn.query("UPDATE admissions SET status = 'Discharged', discharged_on = ?, outcome = ?, discharge_notes = ? WHERE id = ?", [dischargedOn, outcome, notes || null, id]);
+  });
+  return admissionOut(await getAdmissionRow(id));
 }
+
+export const wardOf = (name) => wardNamed(name);

@@ -38,8 +38,8 @@ There is no local database and no localhost anywhere. The server will not start,
 ### One-time setup on Hostinger
 
 1. hPanel > Databases > Management: note the database name and user (`u986504880_kindedEHR_db`).
-2. hPanel > Databases > **Remote MySQL**: allow the address of the machine that will connect (your own computer's public IP for running `migrate`, and Render's outbound IPs, shown in the Render service's **Connect > Outbound** tab). The **hostname** shown on that page is your `DB_HOST`.
-3. Keep the password only in Render's Environment tab (or your own `.env`, which is git-ignored). Never paste it in chat or commit it.
+2. hPanel > Databases > **Remote MySQL**: allow the address of the machine that will connect (your own computer's public IP for running `migrate`, and Railway's outbound IP (Railway service Settings > Networking)). The **hostname** shown on that page is your `DB_HOST`.
+3. Keep the password only in Railway's Variables tab (or your own `.env`, which is git-ignored). Never paste it in chat or commit it.
 
 ### Create the tables and the first administrator
 
@@ -59,13 +59,13 @@ Make the secret with:
 node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 ```
 
-## Deploy on Render
+## Deploy on Railway
 
-1. Push this project to GitHub. In Render choose **New > Web Service** (or **New > Blueprint** to use `render.yaml`), point it at the repository and leave the root directory empty.
-2. Build command `npm ci`, start command `npm run migrate && npm start`.
-3. Environment tab: `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `JWT_SECRET`, `CORS_ORIGINS=https://kindedcarehospital.com`.
-4. Check `https://YOUR-SERVICE.onrender.com/health`.
-5. Frontend: build it with `VITE_API_URL=https://YOUR-SERVICE.onrender.com/api` (a GitHub Actions variable or a `.env.production` file). The site shows a "not connected" screen if this is missing.
+1. Push this project to GitHub. In Railway choose **New Project > Deploy from GitHub repo** and pick it.
+2. Start command `npm run migrate && npm start` (build `npm ci`).
+3. Variables tab: `DB_HOST` (just the hostname, no `https://`), `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `JWT_SECRET`, and `CORS_ORIGINS=https://kindedcarehospital.com,https://ehr.kindedcarehospital.com`.
+4. Check `https://YOUR-SERVICE.up.railway.app/health`.
+5. Frontend: `.env.production` holds `VITE_API_URL=https://YOUR-SERVICE.up.railway.app` (no `/api`; the app adds it). The site shows a "not connected" screen if this is missing.
 
 **Database account:** if Hostinger lets you, do not grant the app's user `UPDATE` or `DELETE` on `audit_log`. The triggers already refuse them, and this closes the gap if someone drops a trigger.
 
@@ -105,6 +105,23 @@ All paths start with `/api`. Send `Authorization: Bearer <accessToken>`. Errors 
 ## Security notes
 
 - Never commit `.env`. Rotate `JWT_SECRET` if it leaks (everyone is signed out).
-- Always serve the API over HTTPS (Render does this for you).
+- Always serve the API over HTTPS (Railway does this for you).
 - Tokens live in the browser. The web app must keep the access token in memory and the renewal token as short-lived as practical, and must not log either.
 - Back up the database on a schedule and test a restore. The audit log is part of that backup.
+| `GET /doctors`, `GET /doctors/:id` | signed in | the directory every doctor picker reads |
+| `POST/PUT/DELETE /doctors`, `POST /doctors/:id/status` | Doctors: create, edit, delete | names are unique; a doctor with appointments or admissions can't be deleted or renamed |
+| `GET /roster?from=&to=&staffId=` | Roster: view | `?mine=1` is open to everyone signed in |
+| `POST /roster` | Roster: create | `{ entries: [{ date, staffId, shift, unit, note }], onConflict: "fail" or "skip" }`; one shift per person per day; at most nine weeks per request |
+| `PUT/DELETE /roster/:id` | Roster: edit, delete | |
+| `GET /admissions?status=&ward=&patientId=`, `GET /admissions/wards`, `GET /admissions/:id` | Admissions: view | `/wards` lists every bed and who is in it |
+| `POST /admissions` | Admissions: create | `{ patientId, ward, bed, doctor, diagnosis, admittedOn? }`; one admission per patient, one patient per bed |
+| `POST /admissions/:id/transfer`, `POST /admissions/:id/discharge` | Admissions: edit | `{ ward, bed }` / `{ outcome, notes, dischargedOn? }` |
+| `GET /accounts/money-accounts`, `/summary?from=&to=`, `/transactions`, `/employees`, `/payroll` | Accounts: view | balances are worked out from the ledger |
+| `POST /accounts/money-accounts`, `/transactions`, `/employees`, `/payroll` | Accounts: create | transactions are Income, Expense or Transfer; payroll `{ month, bonuses }` builds the month's draft |
+| `PUT /accounts/money-accounts/:id`, `/employees/:id`, `POST /accounts/payroll/:id/pay`, `/remit` | Accounts: edit | paying or remitting a month happens once and posts its expense in the same step |
+| `POST /accounts/transactions/:id/void`, `DELETE /accounts/employees/:id` | Accounts: delete | voiding needs a reason and keeps the entry; payroll money can't be voided from the ledger |
+| `GET /billing/invoices`, `/billing/invoices/:id`, `/billing/totals` | Billing: view | |
+| `POST /billing/invoices`, `POST /billing/invoices/:id/payments` | Billing: create, edit | no overpaying; two cashiers can't both take the last of a balance |
+| `GET /claims`, `/claims/claimable`, `/claims/:id` | Billing: view | |
+| `POST /claims`, `/claims/:id/submit`, `/approve`, `/reject`, `/payments` | Billing: create, edit | draft, submitted, approved or rejected, paid; received money is shared over the invoices and posted as payments |
+| `GET /admin/dashboard` | administrators | user counts, users per role, what needs attention, record counts, recent audit entries |

@@ -1,17 +1,17 @@
 import { Router } from "express";
-import { authenticate, requirePerm, validate } from "./guards.js";
 import * as c from "../controllers/admission.controller.js";
-import { createSchema, dischargeSchema, updateSchema } from "../validators/admission.validator.js";
+import { authenticate } from "../middleware/auth.middleware.js";
+import { requirePerm } from "../middleware/permission.middleware.js";
+import { validate } from "../middleware/validate.middleware.js";
+import { admitBody, dischargeBody, transferBody } from "../validators/admission.validator.js";
 
-const r = Router();
-r.use(authenticate());
+const router = Router();
+router.use(authenticate());
 
-r.get("/", requirePerm("Admissions", "view"), c.list);
-r.get("/census", requirePerm("Admissions", "view"), c.census); // before /:id
-r.get("/:id", requirePerm("Admissions", "view"), c.get);
-r.post("/", requirePerm("Admissions", "create"), validate(createSchema), c.create);
-r.put("/:id", requirePerm("Admissions", "edit"), validate(updateSchema), c.update);
-r.patch("/:id", requirePerm("Admissions", "edit"), validate(updateSchema), c.update);
-r.post("/:id/discharge", requirePerm("Admissions", "edit"), validate(dischargeSchema), c.discharge);
-
-export default r;
+router.get("/", requirePerm("Admissions", "view"), c.list);
+router.get("/wards", requirePerm("Admissions", "view"), c.wards);
+router.get("/:id", requirePerm("Admissions", "view"), c.get);
+router.post("/", requirePerm("Admissions", "create"), validate(admitBody, "Check the admission details."), c.create);
+router.post("/:id/transfer", requirePerm("Admissions", "edit"), validate(transferBody, "Choose a ward and bed."), c.move);
+router.post("/:id/discharge", requirePerm("Admissions", "edit"), validate(dischargeBody, "Check the discharge details."), c.dischargePatient);
+export default router;
