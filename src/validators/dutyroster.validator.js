@@ -1,12 +1,12 @@
 import { z } from "zod";
 
-export const SHIFTS = ["Morning", "Afternoon", "Night"];
+export const SHIFTS = ["Morning", "Afternoon", "Night", "On call", "Leave"];
 
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use the date format YYYY-MM-DD.");
 const blankToNull = (v) => (typeof v === "string" && v.trim() === "" ? null : v);
 const optNull = (max) => z.preprocess(blankToNull, z.string().trim().max(max).nullish());
 const staffId = z.string().trim().min(1, "Choose a staff member.").max(40);
-const shift = z.enum(SHIFTS, { message: "Choose Morning, Afternoon or Night." });
+const shift = z.enum(SHIFTS, { message: "Choose a valid shift." });
 
 export const createSchema = z.object({ staffId, date: day, shift, department: optNull(60), notes: optNull(255) });
 

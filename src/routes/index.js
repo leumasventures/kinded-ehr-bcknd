@@ -8,6 +8,7 @@ import emergency from "./emergency.routes.js";
 import audit from "./audit.routes.js";
 import doctors from "./doctor.routes.js";
 import roster from "./roster.routes.js";
+import dutyRoster from "./dutyroster.routes.js";
 import admissions from "./admission.routes.js";
 import accounts from "./account.routes.js";
 import billing from "./billing.routes.js";
@@ -38,8 +39,8 @@ api.use("/emergency-access", emergency);
 api.use("/audit", audit);
 api.use("/doctors", doctors);
 api.use("/doctor", doctors); // the web app calls the singular form too
-api.use("/roster", roster);
-api.use("/duty-roster", roster); // the web app calls this address
+api.use("/roster", roster); // legacy roster API
+api.use("/duty-roster", dutyRoster); // current database-backed duty roster API
 api.use("/admissions", admissions);
 api.use("/billing", billing);
 api.use("/claims", claims);

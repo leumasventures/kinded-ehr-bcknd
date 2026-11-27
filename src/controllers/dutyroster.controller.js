@@ -1,38 +1,67 @@
 import { forbidden, notFound, wrap } from "../utils/errors.js";
 import { audit } from "../services/audit.service.js";
-import { createShifts, deleteShift, getShiftRow, listShifts, shiftOut, updateShift } from "../services/roster.service.js";
+import {
+  assignShifts,
+  createEntry,
+  entryOut,
+  getEntry,
+  listEntries,
+  onDuty,
+  removeEntry,
+  todayISO,
+  updateEntry,
+} from "../services/dutyroster.service.js";
 
-const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s ?? ""));
+const isDay = (s) => /^\\d{4}-\\d{2}-\\d{2}$/.test(String(s ?? ""));
 
-/** Everyone may read their own shifts (?mine=1). The whole roster needs Roster view. */
 export const list = wrap(async (req, res) => {
   const mine = req.query.mine === "1" || req.query.mine === "true";
   if (!mine && !req.user.permissions.Roster?.view) throw forbidden();
-  const shifts = await listShifts({ from: isDay(req.query.from) ? req.query.from : undefined, to: isDay(req.query.to) ? req.query.to : undefined, staffId: mine ? req.user.id : req.query.staffId ? String(req.query.staffId).slice(0, 40) : undefined });
-  // The web app reads "entries"; "shifts" is kept for anything that already uses it.
-  res.json({ shifts, entries: shifts });
+  const entries = await listEntries({
+    from: isDay(req.query.from) ? req.query.from : undefined,
+    to: isDay(req.query.to) ? req.query.to : undefined,
+    staffId: mine ? req.user.id : req.query.staffId ? String(req.query.staffId).slice(0, 40) : undefined,
+    department: req.query.department ? String(req.query.department).slice(0, 60) : undefined,
+    limit: req.query.limit,
+  });
+  res.json({ entries, roster: entries });
+});
+
+export const mine = wrap(async (req, res) => {
+  const entries = await listEntries({ staffId: req.user.id, from: isDay(req.query.from) ? req.query.from : undefined, to: isDay(req.query.to) ? req.query.to : undefined });
+  res.json({ entries, roster: entries });
+});
+
+export const duty = wrap(async (req, res) => {
+  const date = isDay(req.query.date) ? req.query.date : todayISO();
+  res.json({ shifts: await onDuty(date) });
 });
 
 export const create = wrap(async (req, res) => {
-  const { created, skipped } = await createShifts(req.body.entries, { onConflict: req.body.onConflict, by: req.user.id });
-  if (created.length) await audit(req, { action: "Create", module: "Roster", summary: `Added ${created.length} shift${created.length === 1 ? "" : "s"} (${created[0].date}${created.length > 1 ? ` to ${created[created.length - 1].date}` : ""}), ${skipped.length} skipped` });
-  res.status(201).json({ created, skipped });
+  const entry = entryOut(await createEntry(req.body, req.user));
+  await audit(req, { action: "Create", module: "Duty roster", summary: `Rostered ${entry.staff} on ${entry.date} for ${entry.shift}` });
+  res.status(201).json({ entry });
+});
+
+export const assign = wrap(async (req, res) => {
+  const result = await assignShifts(req.body, req.user);
+  if (result.created) await audit(req, { action: "Create", module: "Duty roster", summary: `Assigned ${result.created} duty roster shifts` });
+  res.status(201).json(result);
 });
 
 export const update = wrap(async (req, res) => {
-  const row = await getShiftRow(req.params.id);
-  if (!row) throw notFound("Shift not found.");
-  const shift = await updateShift(row, req.body);
-  await audit(req, { action: "Update", module: "Roster", summary: `Changed ${row.staff_name}'s shift on ${row.shift_date}` });
-  res.json({ shift });
+  const row = await getEntry(req.params.id);
+  if (!row) throw notFound("Roster entry not found.");
+  const changed = await updateEntry(row, req.body);
+  const entry = entryOut(await getEntry(req.params.id));
+  if (changed.length) await audit(req, { action: "Update", module: "Duty roster", summary: `Updated roster entry ${entry.id}: ${changed.join(", ")}` });
+  res.json({ entry });
 });
 
 export const remove = wrap(async (req, res) => {
-  const row = await getShiftRow(req.params.id);
-  if (!row) throw notFound("Shift not found.");
-  await deleteShift(row.id);
-  await audit(req, { action: "Delete", module: "Roster", summary: `Removed ${row.staff_name}'s ${row.shift} shift on ${row.shift_date}` });
+  const row = await getEntry(req.params.id);
+  if (!row) throw notFound("Roster entry not found.");
+  await removeEntry(row);
+  await audit(req, { action: "Delete", module: "Duty roster", summary: `Removed ${row.staff_name}'s ${row.shift} shift on ${row.shift_date}` });
   res.json({ ok: true });
 });
-
-export { shiftOut };
