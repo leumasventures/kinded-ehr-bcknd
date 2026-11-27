@@ -25,7 +25,9 @@ export const record = wrap(async (req, res) => {
 
 // Admitted patients with their latest vitals, optionally one ward: ?ward=
 export const board = wrap(async (req, res) => {
-  res.json({ patients: await wardBoard({ ward: req.query.ward ? String(req.query.ward).slice(0, 60) : undefined }) });
+  const patients = await wardBoard({ ward: req.query.ward ? String(req.query.ward).slice(0, 60) : undefined });
+  // The web app reads "board"; "patients" is kept for anything that already uses it.
+  res.json({ patients, board: patients });
 });
 
 export const notes = wrap(async (req, res) => {

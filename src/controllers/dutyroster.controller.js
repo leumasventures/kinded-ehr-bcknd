@@ -9,7 +9,8 @@ export const list = wrap(async (req, res) => {
   const mine = req.query.mine === "1" || req.query.mine === "true";
   if (!mine && !req.user.permissions.Roster?.view) throw forbidden();
   const shifts = await listShifts({ from: isDay(req.query.from) ? req.query.from : undefined, to: isDay(req.query.to) ? req.query.to : undefined, staffId: mine ? req.user.id : req.query.staffId ? String(req.query.staffId).slice(0, 40) : undefined });
-  res.json({ shifts });
+  // The web app reads "entries"; "shifts" is kept for anything that already uses it.
+  res.json({ shifts, entries: shifts });
 });
 
 export const create = wrap(async (req, res) => {
