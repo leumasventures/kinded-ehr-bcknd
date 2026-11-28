@@ -29,9 +29,11 @@ export const addDaysISO = (iso, days) => new Date(Date.parse(`${iso}T00:00:00Z`)
 const q = async (conn, sql, params = []) => (await conn.query(sql, params))[0];
 const inTx = (conn, fn) => (conn ? fn(conn) : tx(fn));
 const nextCounter = async (conn, name) => {
+  await conn.query("INSERT IGNORE INTO counters (name, value) VALUES (?, 0)", [name]);
   await conn.query("UPDATE counters SET value = LAST_INSERT_ID(value + 1) WHERE name = ?", [name]);
-  return Number((await q(conn, "SELECT LAST_INSERT_ID() AS n"))[0].n);
-};
+  const rows = await q(conn, "SELECT LAST_INSERT_ID() AS n");
+  return Number(rows[0]?.n) || 1;
+};;
 
 // ---------- money maths (the same rules the web app uses) ----------
 

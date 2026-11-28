@@ -20,8 +20,13 @@ export const LAB_CATEGORY = "Laboratory";
 const q = async (conn, sql, params = []) => (await conn.query(sql, params))[0];
 const direct = { query: (s, p) => query(s, p).then((r) => [r]) };
 const nextCounter = async (conn, name) => {
+  // Ensure the named counter exists (first deploy often only seeded some names).
+  await conn.query("INSERT IGNORE INTO counters (name, value) VALUES (?, 500)", [name]);
   await conn.query("UPDATE counters SET value = LAST_INSERT_ID(value + 1) WHERE name = ?", [name]);
-  return Number((await q(conn, "SELECT LAST_INSERT_ID() AS n"))[0].n);
+  const rows = await q(conn, "SELECT LAST_INSERT_ID() AS n");
+  const n = Number(rows[0]?.n);
+  if (!Number.isFinite(n) || n < 1) throw bad("Could not allocate a lab order number. Check the counters table.");
+  return n;
 };
 
 const HEAD = `SELECT o.*, p.name AS patient_name, u.name AS ordered_by_name,
@@ -112,12 +117,13 @@ export async function createOrder({ patientId, priority = "Routine", clinicalNot
       [LAB_CATEGORY, ...ids]
     );
     if (found.length !== ids.length) throw bad("One of those tests isn't on the laboratory price list, or has been switched off. Open Price List and ensure Laboratory items exist in the database.");
-    const byId = new Map(found.map((t) => [t.id, t]));
-    const tests = ids.map((id) => byId.get(id)); // keep the order they were chosen in
+    const byId = new Map(found.map((t) => [String(t.id), t]));
+    const tests = ids.map((id) => byId.get(String(id))).filter(Boolean);
+    if (tests.length !== ids.length) throw bad("One of those tests isn't on the laboratory price list, or has been switched off.");
 
     const orderId = `L-${await nextCounter(conn, "lab")}`;
     await conn.query("INSERT INTO lab_orders (id, patient_id, ordered_by, priority, status, clinical_notes, ordered_at) VALUES (?,?,?,?, 'Ordered', ?, NOW())", [orderId, patientId, by.id, priority, clinicalNotes || null]);
-    for (const t of tests) await conn.query("INSERT INTO lab_order_tests (order_id, price_item_id, code, name) VALUES (?,?,?,?)", [orderId, t.id, t.code, t.name]);
+    for (const t of tests) await conn.query("INSERT INTO lab_order_tests (order_id, price_item_id, code, name) VALUES (?,?,?,?)", [orderId, t.id, t.code || "", t.name]);
 
     const charged = await addCharges({ id: patientId }, `lab:${orderId}`, tests.map((t) => ({ description: t.name, qty: 1, unitPrice: Number(t.price) })), { createdBy: by.id, conn });
     return { order: await getOrder(orderId, conn), charged: charged ? { invoiceId: charged.invoiceId, amount: charged.amount } : null };

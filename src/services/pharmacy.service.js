@@ -19,8 +19,10 @@ const expandIn = (ids) => {
 const q = async (conn, sql, params = []) => (await conn.query(sql, params))[0];
 const direct = { query: (s, p) => query(s, p).then((r) => [r]) };
 const nextCounter = async (conn, name) => {
+  await conn.query("INSERT IGNORE INTO counters (name, value) VALUES (?, 1000)", [name]);
   await conn.query("UPDATE counters SET value = LAST_INSERT_ID(value + 1) WHERE name = ?", [name]);
-  return Number((await q(conn, "SELECT LAST_INSERT_ID() AS n"))[0].n);
+  const rows = await q(conn, "SELECT LAST_INSERT_ID() AS n");
+  return Number(rows[0]?.n) || 1;
 };
 const like = (s) => `%${s.replace(/[\\%_]/g, "\\$&")}%`;
 const drugLabel = (d) => [d.name, d.strength, d.form].filter(Boolean).join(" ");
