@@ -5,6 +5,14 @@ import { query, tx } from "../config/database.js";
 import { bad, conflict } from "../utils/errors.js";
 import { SHIFTS } from "../validators/dutyroster.validator.js";
 
+/** mysql2 needs one placeholder per value for IN lists. */
+const expandIn = (ids) => {
+  const list = Array.isArray(ids) ? ids : [ids];
+  if (!list.length) return { sql: "(NULL)", params: [] };
+  return { sql: `(${list.map(() => "?").join(",")})`, params: list };
+};
+
+
 export const todayISO = () => new Date().toISOString().slice(0, 10);
 export const addDaysISO = (iso, days) => new Date(Date.parse(`${iso}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 const q = async (conn, sql, params = []) => (await conn.query(sql, params))[0];
@@ -61,7 +69,8 @@ export const assignShifts = ({ staffIds, dates, shift, department }, by) =>
     const ids = [...new Set(staffIds)];
     const days = [...new Set(dates)];
     days.forEach(notPast);
-    const active = await q(conn, "SELECT id FROM users WHERE id IN (?) AND active = 1", [ids]);
+    const _ui = expandIn(ids);
+    const active = await q(conn, `SELECT id FROM users WHERE id IN ${_ui.sql} AND active = 1`, _ui.params);
     if (active.length !== ids.length) throw bad("One of those staff members doesn't exist or isn't active.");
     let created = 0;
     for (const staffId of ids) {

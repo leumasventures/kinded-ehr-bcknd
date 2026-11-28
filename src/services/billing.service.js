@@ -12,6 +12,14 @@
 import { query, tx } from "../config/database.js";
 import { bad, conflict, notFound } from "../utils/errors.js";
 
+/** mysql2 needs one placeholder per value for IN lists. */
+const expandIn = (ids) => {
+  const list = Array.isArray(ids) ? ids : [ids];
+  if (!list.length) return { sql: "(NULL)", params: [] };
+  return { sql: `(${list.map(() => "?").join(",")})`, params: list };
+};
+
+
 export const PAYMENT_METHODS = ["Cash", "Bank Transfer", "POS", "Cheque", "HMO / Insurance"];
 export const CLAIM_STATUSES = ["Draft", "Submitted", "Approved", "Rejected", "Paid"];
 
@@ -84,8 +92,10 @@ async function loadInvoices(conn, where = "", params = [], suffix = "ORDER BY i.
   const rows = await q(conn, `${SELECT_INVOICE} ${where} ${suffix}`, params);
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
-  const items = await q(conn, "SELECT * FROM invoice_items WHERE invoice_id IN (?) ORDER BY id", [ids]);
-  const pays = await q(conn, "SELECT * FROM payments WHERE invoice_id IN (?) ORDER BY id", [ids]);
+  const _ii = expandIn(ids);
+  const items = ids.length ? await q(conn, `SELECT * FROM invoice_items WHERE invoice_id IN ${_ii.sql} ORDER BY id`, _ii.params) : [];
+  const _pp = expandIn(ids);
+  const pays = ids.length ? await q(conn, `SELECT * FROM payments WHERE invoice_id IN ${_pp.sql} ORDER BY id`, _pp.params) : [];
   return rows.map((r) => invoiceOut(r, items.filter((x) => x.invoice_id === r.id), pays.filter((x) => x.invoice_id === r.id)));
 }
 
@@ -219,8 +229,9 @@ async function loadClaims(conn, where = "", params = [], suffix = "ORDER BY c.cr
   const rows = await q(conn, `SELECT c.* FROM claims c ${where} ${suffix}`, params);
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
-  const lines = await q(conn, `SELECT cl.*, p.name AS patient_name FROM claim_lines cl JOIN patients p ON p.id = cl.patient_id WHERE cl.claim_id IN (?) ORDER BY cl.id`, [ids]);
-  const events = await q(conn, "SELECT * FROM claim_events WHERE claim_id IN (?) ORDER BY id", [ids]);
+  const _cid = expandIn(ids);
+  const lines = await q(conn, `SELECT cl.*, p.name AS patient_name FROM claim_lines cl JOIN patients p ON p.id = cl.patient_id WHERE cl.claim_id IN ${_cid.sql} ORDER BY cl.id`, _cid.params);
+  const events = await q(conn, `SELECT * FROM claim_events WHERE claim_id IN ${_cid.sql} ORDER BY id`, _cid.params);
   return rows.map((r) => {
     const claim = {
       id: r.id,
@@ -268,12 +279,14 @@ export async function createClaim({ payer, payerType, invoiceIds }, by) {
   if (!Array.isArray(invoiceIds) || invoiceIds.length === 0) throw bad("Choose at least one invoice.");
   const ids = [...new Set(invoiceIds)];
   const id = await tx(async (conn) => {
-    await q(conn, "SELECT id FROM invoices WHERE id IN (?) ORDER BY id FOR UPDATE", [ids]);
-    const invoices = (await loadInvoices(conn, "WHERE i.id IN (?)", [ids])).sort((x, y) => Number(x.id.replace(/\D/g, "")) - Number(y.id.replace(/\D/g, ""))); // oldest first: payments are shared out in this order
+    const _lock = expandIn(ids);
+    await q(conn, `SELECT id FROM invoices WHERE id IN ${_lock.sql} ORDER BY id FOR UPDATE`, _lock.params);
+    const invoices = (await loadInvoices(conn, `WHERE i.id IN ${expandIn(ids).sql}`, expandIn(ids).params)).sort((x, y) => Number(x.id.replace(/\D/g, "")) - Number(y.id.replace(/\D/g, ""))); // oldest first: payments are shared out in this order
     if (invoices.length !== ids.length) throw notFound("One of the invoices doesn't exist.");
-    const taken = await q(conn, "SELECT cl.invoice_id FROM claim_lines cl JOIN claims c ON c.id = cl.claim_id WHERE c.status <> 'Rejected' AND cl.invoice_id IN (?)", [ids]);
+    const _tid = expandIn(ids);
+    const taken = await q(conn, `SELECT cl.invoice_id FROM claim_lines cl JOIN claims c ON c.id = cl.claim_id WHERE c.status <> 'Rejected' AND cl.invoice_id IN ${_tid.sql}`, _tid.params);
     if (taken.length) throw conflict(`${taken[0].invoice_id} is already in another claim.`);
-    const patients = await q(conn, "SELECT id, payer, payer_name, member_id FROM patients WHERE id IN (?)", [[...new Set(invoices.map((i) => i.patientId))]]);
+    const patients = ((pids) => { const e = expandIn(pids); return q(conn, `SELECT id, payer, payer_name, member_id FROM patients WHERE id IN ${e.sql}`, e.params); })([...new Set(invoices.map((i) => i.patientId))]);
     const byId = new Map(patients.map((p) => [p.id, p]));
     for (const inv of invoices) {
       const p = byId.get(inv.patientId);
@@ -359,8 +372,8 @@ export async function claimableByPayer() {
      WHERE p.payer <> 'Self-pay' AND i.id NOT IN (SELECT cl.invoice_id FROM claim_lines cl JOIN claims c ON c.id = cl.claim_id WHERE c.status <> 'Rejected')`
   );
   if (!rows.length) return [];
-  const invoices = (await loadInvoices(direct, "WHERE i.id IN (?)", [rows.map((r) => r.id)])).filter((i) => i.balance > 0);
-  const patients = await query("SELECT id, payer, payer_name, member_id FROM patients WHERE id IN (?)", [[...new Set(invoices.map((i) => i.patientId))]]);
+  const invoices = (await loadInvoices(direct, `WHERE i.id IN ${expandIn(rows.map((r) => r.id)).sql}`, expandIn(rows.map((r) => r.id)).params)).filter((i) => i.balance > 0);
+  const patients = ((pids) => { const e = expandIn(pids); return query(`SELECT id, payer, payer_name, member_id FROM patients WHERE id IN ${e.sql}`, e.params); })([...new Set(invoices.map((i) => i.patientId))]);
   const byId = new Map(patients.map((p) => [p.id, p]));
   const groups = new Map();
   for (const invoice of invoices) {

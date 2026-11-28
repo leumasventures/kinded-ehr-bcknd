@@ -8,6 +8,14 @@ import { query, tx } from "../config/database.js";
 import { bad, conflict, notFound } from "../utils/errors.js";
 import { addCharges } from "./billing.service.js";
 
+/** mysql2 needs one placeholder per value for IN lists. */
+const expandIn = (ids) => {
+  const list = Array.isArray(ids) ? ids : [ids];
+  if (!list.length) return { sql: "(NULL)", params: [] };
+  return { sql: `(${list.map(() => "?").join(",")})`, params: list };
+};
+
+
 const q = async (conn, sql, params = []) => (await conn.query(sql, params))[0];
 const direct = { query: (s, p) => query(s, p).then((r) => [r]) };
 const nextCounter = async (conn, name) => {
@@ -145,7 +153,8 @@ export const prescribe = ({ patientId, items }, by) =>
     if (!(await q(conn, "SELECT id FROM patients WHERE id = ?", [patientId])).length) throw bad("That patient isn't registered. Register the patient first.");
     const ids = items.map((i) => i.drugId);
     if (new Set(ids).size !== ids.length) throw bad("The same drug is listed twice. Combine it into one line.");
-    const drugs = await q(conn, "SELECT id FROM drugs WHERE active = 1 AND id IN (?)", [ids]);
+    const _di = expandIn(ids);
+    const drugs = await q(conn, `SELECT id FROM drugs WHERE active = 1 AND id IN ${_di.sql}`, _di.params);
     if (drugs.length !== ids.length) throw bad("One of those drugs isn't on the list, or has been switched off.");
     const created = [];
     for (const i of items) {
@@ -153,7 +162,8 @@ export const prescribe = ({ patientId, items }, by) =>
       await conn.query("INSERT INTO prescriptions (id, patient_id, prescriber_id, drug_id, dose, frequency, duration, quantity, instructions, status, created_at) VALUES (?,?,?,?,?,?,?,?,?, 'Pending', NOW())", [id, patientId, by.id, i.drugId, i.dose, i.frequency, i.duration || null, i.quantity, i.instructions || null]);
       created.push(id);
     }
-    return (await q(conn, `${HEAD} WHERE x.id IN (?) ORDER BY x.id`, [created])).map(rxOut);
+    const _ci = expandIn(created);
+    return (await q(conn, `${HEAD} WHERE x.id IN ${_ci.sql} ORDER BY x.id`, _ci.params)).map(rxOut);
   });
 
 /** Dispenses a pending prescription: stock out, movement written, bill charged, all or nothing. */

@@ -6,6 +6,14 @@ import { query, tx } from "../config/database.js";
 import { bad, conflict, notFound } from "../utils/errors.js";
 import { lockName, nextCounter, round2, todayISO } from "./ids.js";
 
+/** mysql2 needs one placeholder per value for IN lists. */
+const expandIn = (ids) => {
+  const list = Array.isArray(ids) ? ids : [ids];
+  if (!list.length) return { sql: "(NULL)", params: [] };
+  return { sql: `(${list.map(() => "?").join(",")})`, params: list };
+};
+
+
 // ---------- money accounts ----------
 export const accountOut = (r, balance) => ({ id: r.id, name: r.name, kind: r.kind, bankName: r.bank_name, accountNumber: r.account_number, opening: Number(r.opening), openingDate: r.opening_date, active: !!r.active, ...(balance === undefined ? {} : { balance }) });
 
@@ -165,7 +173,10 @@ export const runOut = (r, lines) => {
 export async function listRuns() {
   const runs = await query("SELECT * FROM payroll_runs ORDER BY month DESC");
   if (!runs.length) return [];
-  const lines = await query("SELECT * FROM payroll_lines WHERE run_id IN (?) ORDER BY id", [runs.map((r) => r.id)]);
+  const _pi = expandIn(runs.map((r) => r.id));
+  const lines = _pi.params.length
+    ? await query(`SELECT * FROM payroll_lines WHERE run_id IN ${_pi.sql} ORDER BY id`, _pi.params)
+    : [];
   return runs.map((r) => runOut(r, lines.filter((l) => l.run_id === r.id)));
 }
 export const getRun = async (id) => (await listRuns()).find((r) => r.id === id);

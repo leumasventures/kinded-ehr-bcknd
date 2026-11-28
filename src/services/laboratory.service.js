@@ -6,6 +6,14 @@ import { query, tx } from "../config/database.js";
 import { bad, conflict, notFound } from "../utils/errors.js";
 import { addCharges, removeCharges } from "./billing.service.js";
 
+/** mysql2 needs one placeholder per value for IN lists. */
+const expandIn = (ids) => {
+  const list = Array.isArray(ids) ? ids : [ids];
+  if (!list.length) return { sql: "(NULL)", params: [] };
+  return { sql: `(${list.map(() => "?").join(",")})`, params: list };
+};
+
+
 // ASSUMPTION: orderable tests are the active items of this price_list category.
 export const LAB_CATEGORY = "Laboratory";
 
@@ -53,7 +61,11 @@ export const orderOut = (r, tests, withResults = true) => ({
 async function loadOrders(conn, where = "", params = [], suffix = WORKLIST, withResults = true) {
   const rows = await q(conn, `${HEAD} ${where} ${suffix}`, params);
   if (!rows.length) return [];
-  const tests = await q(conn, "SELECT id, order_id, code, name, result_value, unit, reference_range, flag FROM lab_order_tests WHERE order_id IN (?) ORDER BY id", [rows.map((r) => r.id)]);
+  const orderIds = rows.map((r) => r.id);
+  const _oi = expandIn(orderIds);
+  const tests = orderIds.length
+    ? await q(conn, `SELECT id, order_id, code, name, result_value, unit, reference_range, flag FROM lab_order_tests WHERE order_id IN ${_oi.sql} ORDER BY id`, _oi.params)
+    : [];
   return rows.map((r) => orderOut(r, tests.filter((t) => t.order_id === r.id), withResults));
 }
 
@@ -92,8 +104,14 @@ export async function createOrder({ patientId, priority = "Routine", clinicalNot
   if (ids.length !== testIds.length) throw bad("The same test is listed twice.");
   return tx(async (conn) => {
     if (!(await q(conn, "SELECT id FROM patients WHERE id = ?", [patientId])).length) throw bad("That patient isn't registered. Register the patient first.");
-    const found = await q(conn, "SELECT id, code, name, price FROM price_list WHERE active = 1 AND category = ? AND id IN (?)", [LAB_CATEGORY, ids]);
-    if (found.length !== ids.length) throw bad("One of those tests isn't on the laboratory price list, or has been switched off.");
+    if (!ids.length) throw bad("Choose at least one test.");
+    const placeholders = ids.map(() => "?").join(",");
+    const found = await q(
+      conn,
+      `SELECT id, code, name, price FROM price_list WHERE active = 1 AND category = ? AND id IN (${placeholders})`,
+      [LAB_CATEGORY, ...ids]
+    );
+    if (found.length !== ids.length) throw bad("One of those tests isn't on the laboratory price list, or has been switched off. Open Price List and ensure Laboratory items exist in the database.");
     const byId = new Map(found.map((t) => [t.id, t]));
     const tests = ids.map((id) => byId.get(id)); // keep the order they were chosen in
 

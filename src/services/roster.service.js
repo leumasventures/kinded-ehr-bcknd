@@ -2,6 +2,14 @@ import { query, tx } from "../config/database.js";
 import { bad, conflict, notFound } from "../utils/errors.js";
 import { MAX_SPAN_DAYS, UNITS } from "../validators/roster.validator.js";
 
+/** mysql2 needs one placeholder per value for IN lists. */
+const expandIn = (ids) => {
+  const list = Array.isArray(ids) ? ids : [ids];
+  if (!list.length) return { sql: "(NULL)", params: [] };
+  return { sql: `(${list.map(() => "?").join(",")})`, params: list };
+};
+
+
 export const shiftOut = (r) => ({ id: String(r.id), date: r.shift_date, staffId: r.staff_id, staffName: r.staff_name, staffRole: r.staff_role, shift: r.shift, unit: r.unit, note: r.note, createdBy: r.created_by ?? "", createdAt: new Date(r.created_at).getTime() });
 
 export async function listShifts({ from, to, staffId, limit = 1000 }) {
@@ -27,7 +35,8 @@ export async function createShifts(entries, { onConflict = "fail", by }) {
   for (const e of entries) if (e.unit && !UNITS.includes(e.unit)) throw bad(`"${e.unit}" is not a unit in this hospital.`);
   return tx(async (conn) => {
     const ids = [...new Set(entries.map((e) => e.staffId))];
-    const [staff] = await conn.query("SELECT u.id, u.name, u.active, r.name AS role_name FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id IN (?)", [ids]);
+    const _si = expandIn(ids);
+    const [staff] = await conn.query(`SELECT u.id, u.name, u.active, r.name AS role_name FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id IN ${_si.sql}`, _si.params);
     const byId = new Map(staff.map((s) => [s.id, s]));
     for (const id of ids) {
       const s = byId.get(id);
@@ -52,7 +61,8 @@ export async function createShifts(entries, { onConflict = "fail", by }) {
       const [r] = await conn.query("INSERT INTO roster_shifts (shift_date, staff_id, staff_name, staff_role, shift, unit, note, created_by) VALUES (?,?,?,?,?,?,?,?)", [e.date, e.staffId, s.name, s.role_name, e.shift, e.unit, e.note, by]);
       created.push(r.insertId);
     }
-    const rows = created.length ? (await conn.query("SELECT * FROM roster_shifts WHERE id IN (?) ORDER BY shift_date, staff_name", [created]))[0] : [];
+    const _ri = expandIn(created);
+    const rows = created.length ? (await conn.query(`SELECT * FROM roster_shifts WHERE id IN ${_ri.sql} ORDER BY shift_date, staff_name`, _ri.params))[0] : [];
     return { created: rows.map(shiftOut), skipped };
   });
 }
